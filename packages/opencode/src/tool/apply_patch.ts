@@ -7,6 +7,7 @@ import { InstanceState } from "@/effect/instance-state"
 import { Patch } from "../patch"
 import { createTwoFilesPatch, diffLines } from "diff"
 import { assertExternalDirectoryEffect } from "./external-directory"
+import { Familiarity } from "./familiarity"
 import { trimDiff } from "./edit"
 import { LSP } from "@/lsp/lsp"
 import { FSUtil } from "@opencode-ai/core/fs-util"
@@ -26,6 +27,7 @@ export const ApplyPatchTool = Tool.define(
     const afs = yield* FSUtil.Service
     const format = yield* Format.Service
     const events = yield* EventV2Bridge.Service
+    const familiarity = yield* Familiarity.Service
 
     const run = Effect.fn("ApplyPatchTool.execute")(function* (
       params: Schema.Schema.Type<typeof Parameters>,
@@ -203,6 +205,10 @@ export const ApplyPatchTool = Tool.define(
 
       // Check permissions if needed
       const relativePaths = fileChanges.map((c) => path.relative(instance.worktree, c.filePath).replaceAll("\\", "/"))
+      // Keyed by the source path: for a move, the content the student may know lives at filePath, and the
+      // destination is a fresh path they could never have read.
+      const unfamiliar = new Set(yield* familiarity.getUnfamiliar(fileChanges.map((c) => c.filePath)))
+      const unfamiliarFiles = relativePaths.filter((_, i) => unfamiliar.has(fileChanges[i].filePath))
       yield* ctx.ask({
         permission: "edit",
         patterns: relativePaths,
@@ -211,8 +217,14 @@ export const ApplyPatchTool = Tool.define(
           filepath: relativePaths.join(", "),
           diff: totalDiff,
           files,
+          unfamiliarFiles,
         },
       })
+      yield* Effect.forEach(
+        fileChanges.filter((c) => c.type !== "delete"),
+        (c) => familiarity.markFamiliar(c.movePath ?? c.filePath),
+        { discard: true },
+      )
 
       // Apply the changes
       const updates: Array<{ file: string; event: "add" | "change" | "unlink" }> = []
