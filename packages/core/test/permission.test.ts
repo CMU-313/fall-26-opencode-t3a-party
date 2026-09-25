@@ -1,4 +1,5 @@
 import { describe, expect } from "bun:test"
+import os from "os"
 import { Cause, Deferred, Effect, Fiber, Layer } from "effect"
 import { AgentV2 } from "@opencode-ai/core/agent"
 import { Database } from "@opencode-ai/core/database/database"
@@ -9,6 +10,7 @@ import { Location } from "@opencode-ai/core/location"
 import { PermissionV2 } from "@opencode-ai/core/permission"
 import { PermissionTable } from "@opencode-ai/core/permission/sql"
 import { PermissionSaved } from "@opencode-ai/core/permission/saved"
+import { EditDecision } from "@opencode-ai/core/permission/decision"
 import { Project } from "@opencode-ai/core/project"
 import { ProjectTable } from "@opencode-ai/core/project/sql"
 import { AbsolutePath } from "@opencode-ai/core/schema"
@@ -30,6 +32,7 @@ const it = testEffect(
       EventV2.node,
       SessionStore.node,
       PermissionSaved.node,
+      EditDecision.node,
       AgentV2.node,
       PermissionV2.node,
     ]),
@@ -85,7 +88,7 @@ function assertion(input: Partial<PermissionV2.AssertInput> = {}) {
   } satisfies PermissionV2.AssertInput
 }
 
-function waitForRequest() {
+function waitForRequest(input: Partial<PermissionV2.AssertInput> = {}) {
   return Effect.gen(function* () {
     const service = yield* PermissionV2.Service
     const events = yield* EventV2.Service
@@ -96,10 +99,14 @@ function waitForRequest() {
         : Effect.void,
     )
     yield* Effect.addFinalizer(() => unsubscribe)
-    const fiber = yield* service.assert(assertion()).pipe(Effect.forkScoped)
+    const fiber = yield* service.assert(assertion(input)).pipe(Effect.forkScoped)
     const request = yield* Deferred.await(asked)
     return { service, fiber, request }
   })
+}
+
+function editAssertion(input: Partial<PermissionV2.AssertInput> = {}) {
+  return { action: "edit", resources: ["src/index.ts"], ...input }
 }
 
 describe("PermissionV2", () => {
@@ -310,6 +317,87 @@ describe("PermissionV2", () => {
       yield* service.assert(assertion({ id: PermissionV2.ID.create("per_next"), resources: ["src/next.ts"] }))
       yield* saved.remove(id)
       expect(yield* saved.list()).toEqual([])
+    }),
+  )
+})
+
+describe("EditDecision tracking", () => {
+  it.effect("records an accepted decision when an edit is approved", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      const { service, fiber, request } = yield* waitForRequest(editAssertion())
+      yield* service.reply({ requestID: request.id, reply: "once" })
+      yield* Fiber.join(fiber)
+
+      const decisions = yield* EditDecision.Service
+      const rows = yield* decisions.forSession(request.sessionID)
+      expect(rows).toHaveLength(1)
+      expect(rows[0]).toMatchObject({
+        sessionID: request.sessionID,
+        editID: request.id,
+        decision: "accepted",
+      })
+      expect(rows[0]!.userID).toBe(os.userInfo().username || "user")
+      expect(typeof rows[0]!.timeCreated).toBe("number")
+    }),
+  )
+
+  it.effect("records a rejected decision when an edit is declined", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      const { service, fiber, request } = yield* waitForRequest(editAssertion())
+      yield* service.reply({ requestID: request.id, reply: "reject" })
+      yield* Fiber.await(fiber)
+
+      const decisions = yield* EditDecision.Service
+      const rows = yield* decisions.forSession(request.sessionID)
+      expect(rows).toHaveLength(1)
+      expect(rows[0]).toMatchObject({
+        sessionID: request.sessionID,
+        editID: request.id,
+        decision: "rejected",
+      })
+    }),
+  )
+
+  it.effect("does not record a decision for non-edit permissions", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      const { service, fiber, request } = yield* waitForRequest()
+      yield* service.reply({ requestID: request.id, reply: "once" })
+      yield* Fiber.join(fiber)
+
+      const decisions = yield* EditDecision.Service
+      expect(yield* decisions.forSession(request.sessionID)).toEqual([])
+    }),
+  )
+
+  it.effect("does not record a decision when the edit is never replied to", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      const { fiber, request } = yield* waitForRequest(editAssertion())
+      yield* Fiber.interrupt(fiber)
+
+      const decisions = yield* EditDecision.Service
+      expect(yield* decisions.forSession(request.sessionID)).toEqual([])
+    }),
+  )
+
+  it.effect("does not create duplicate rows for two rapid decisions on the same edit", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      const decisions = yield* EditDecision.Service
+      const input = {
+        sessionID: SessionV2.ID.make("ses_test"),
+        userID: "student",
+        editID: "per_race",
+        decision: "accepted" as const,
+      }
+      yield* Effect.all([decisions.record(input), decisions.record({ ...input, decision: "rejected" })], {
+        concurrency: "unbounded",
+      })
+
+      expect(yield* decisions.forSession(SessionV2.ID.make("ses_test"))).toHaveLength(1)
     }),
   )
 })
