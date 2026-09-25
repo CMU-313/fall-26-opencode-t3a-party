@@ -15,6 +15,7 @@ import { Permission } from "../../src/permission"
 import { SessionID, MessageID } from "../../src/session/schema"
 import { Instruction } from "../../src/session/instruction"
 import { ReadTool } from "../../src/tool/read"
+import { Familiarity } from "@/tool/familiarity"
 import { Truncate } from "@/tool/truncate"
 import { Tool } from "@/tool/tool"
 import { Filesystem } from "@/util/filesystem"
@@ -48,6 +49,7 @@ const readLayer = (flags: Partial<RuntimeFlags.Info> = {}) =>
   LayerNode.compile(
     LayerNode.group([
       Agent.node,
+      Familiarity.node,
       FSUtil.node,
       CrossSpawnSpawner.node,
       Instruction.node,
@@ -603,6 +605,109 @@ describe("tool.read binary detection", () => {
 
       const err = yield* fail(dir, { filePath: path.join(dir, "module.wasm") })
       expect(err.message).toContain("Cannot read binary file")
+    }),
+  )
+})
+
+describe("tool.read familiarity", () => {
+  // Prompt @-mentions call the read tool without a tool call ID; the model's own reads always carry one.
+  const studentCtx = { ...ctx, callID: undefined }
+  const modelCtx = { ...ctx, callID: "call_model_read" }
+
+  const familiar = (dir: string, file: string) =>
+    provideInstance(dir)(Familiarity.Service.use((familiarity) => familiarity.isFamiliar(file)))
+
+  it.live("a file the student reads becomes familiar", () =>
+    Effect.gen(function* () {
+      const dir = yield* tmpdirScoped()
+      const file = path.join(dir, "notes.txt")
+      yield* put(file, "hello")
+
+      yield* exec(dir, { filePath: file }, studentCtx)
+      expect(yield* familiar(dir, file)).toBe(true)
+    }),
+  )
+
+  it.live("a partial student read still makes the file familiar", () =>
+    Effect.gen(function* () {
+      const dir = yield* tmpdirScoped()
+      const file = path.join(dir, "long.txt")
+      yield* put(file, Array.from({ length: 20 }, (_, i) => `line${i + 1}`).join("\n"))
+
+      yield* exec(dir, { filePath: file, offset: 5, limit: 3 }, studentCtx)
+      expect(yield* familiar(dir, file)).toBe(true)
+    }),
+  )
+
+  it.live("an image the student attaches becomes familiar", () =>
+    Effect.gen(function* () {
+      const dir = yield* tmpdirScoped()
+      const file = path.join(dir, "image.png")
+      yield* put(
+        file,
+        Buffer.from(
+          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==",
+          "base64",
+        ),
+      )
+
+      yield* exec(dir, { filePath: file }, studentCtx)
+      expect(yield* familiar(dir, file)).toBe(true)
+    }),
+  )
+
+  it.live("a file only the model reads stays unfamiliar", () =>
+    Effect.gen(function* () {
+      const dir = yield* tmpdirScoped()
+      const file = path.join(dir, "notes.txt")
+      yield* put(file, "hello")
+
+      yield* exec(dir, { filePath: file }, modelCtx)
+      expect(yield* familiar(dir, file)).toBe(false)
+    }),
+  )
+
+  it.live("listing a directory marks neither the directory nor its children", () =>
+    Effect.gen(function* () {
+      const dir = yield* tmpdirScoped()
+      const child = path.join(dir, "src", "child.ts")
+      yield* put(child, "export {}")
+
+      yield* exec(dir, { filePath: path.join(dir, "src") }, studentCtx)
+      expect(yield* familiar(dir, path.join(dir, "src"))).toBe(false)
+      expect(yield* familiar(dir, child)).toBe(false)
+    }),
+  )
+
+  it.live("a missing file does not become familiar", () =>
+    Effect.gen(function* () {
+      const dir = yield* tmpdirScoped()
+      const file = path.join(dir, "missing.txt")
+
+      yield* fail(dir, { filePath: file }, studentCtx)
+      expect(yield* familiar(dir, file)).toBe(false)
+    }),
+  )
+
+  it.live("a binary file the read rejects does not become familiar", () =>
+    Effect.gen(function* () {
+      const dir = yield* tmpdirScoped()
+      const file = path.join(dir, "module.wasm")
+      yield* put(file, "not really wasm")
+
+      yield* fail(dir, { filePath: file }, studentCtx)
+      expect(yield* familiar(dir, file)).toBe(false)
+    }),
+  )
+
+  it.live("an out-of-range read does not make the file familiar", () =>
+    Effect.gen(function* () {
+      const dir = yield* tmpdirScoped()
+      const file = path.join(dir, "short.txt")
+      yield* put(file, "line1\nline2")
+
+      yield* fail(dir, { filePath: file, offset: 10 }, studentCtx)
+      expect(yield* familiar(dir, file)).toBe(false)
     }),
   )
 })
