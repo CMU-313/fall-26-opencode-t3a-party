@@ -18,7 +18,7 @@ const locationLayer = Layer.succeed(
 const it = testEffect(AppNodeBuilder.build(CommandV2.node, [[Location.node, locationLayer]]))
 
 describe("CommandPlugin.Plugin", () => {
-  it.effect("registers built-in init and review commands", () =>
+  it.effect("registers built-in init, review, and explain commands", () =>
     Effect.gen(function* () {
       const command = yield* CommandV2.Service
       yield* CommandPlugin.Plugin.effect(
@@ -42,6 +42,22 @@ describe("CommandPlugin.Plugin", () => {
         description: "review changes [commit|branch|pr], defaults to uncommitted",
         subtask: true,
       })
+      expect(yield* command.get("explain")).toMatchObject({
+        name: "explain",
+        description: "explain a file or symbol, including where it is used across the project",
+      })
+      const explain = yield* command.get("explain")
+      expect(explain?.template).toContain("`/repo`")
+      expect(explain?.template).not.toContain("${path}")
+      expect(explain?.template).toContain("## Scope: Project Source Only")
+      expect(explain?.template).toContain("Never treat third-party code as a caller or dependency.")
+      expect(explain?.template).toContain("### What this does")
+      expect(explain?.template).toContain("### Where it is used")
+      expect(explain?.template).toContain("### Why it is structured this way")
+      expect(explain?.template).toContain("Include at least one call site whenever one exists")
+      expect(explain?.template).toContain("No callers found elsewhere in the project.")
+      expect(explain?.template).toContain("Never invent or guess a call site.")
+
     }),
   )
 })
