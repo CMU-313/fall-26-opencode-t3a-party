@@ -1172,3 +1172,97 @@ it.instance(
     }),
   { git: true },
 )
+
+// unfamiliar-file edits
+
+const editRequest = (unfamiliarFiles: string[], ruleset: PermissionV1.Ruleset) => ({
+  sessionID: SessionID.make("session_test"),
+  permission: "edit",
+  patterns: ["src/parser.ts"],
+  metadata: { filepath: "src/parser.ts", diff: "", unfamiliarFiles },
+  always: ["*"],
+  ruleset,
+})
+
+const allowEdits: PermissionV1.Ruleset = [{ permission: "edit", pattern: "*", action: "allow" }]
+
+it.instance(
+  "ask - prompts for an unfamiliar-file edit even when edits are allowed",
+  () =>
+    Effect.gen(function* () {
+      const fiber = yield* ask(editRequest(["src/parser.ts"], allowEdits)).pipe(Effect.forkScoped)
+
+      const items = yield* waitForPending(1)
+      expect(items[0].metadata?.unfamiliarFiles).toEqual(["src/parser.ts"])
+
+      // The warning must not block the student from continuing.
+      yield* reply({ requestID: items[0].id, reply: "once" })
+      expect(Exit.isSuccess(yield* Fiber.await(fiber))).toBe(true)
+    }),
+  { git: true },
+)
+
+it.instance(
+  "ask - an allowed edit with no unfamiliar files resolves without prompting",
+  () =>
+    Effect.gen(function* () {
+      expect(yield* ask(editRequest([], allowEdits))).toBeUndefined()
+      expect(yield* list()).toHaveLength(0)
+    }),
+  { git: true },
+)
+
+it.instance(
+  "ask - deny still wins over an unfamiliar-file prompt",
+  () =>
+    Effect.gen(function* () {
+      const err = yield* fail(
+        ask(editRequest(["src/parser.ts"], [{ permission: "edit", pattern: "*", action: "deny" }])),
+      )
+      expect(err).toBeInstanceOf(PermissionV1.DeniedError)
+    }),
+  { git: true },
+)
+
+it.instance(
+  "ask - an earlier always reply does not silence an unfamiliar-file prompt",
+  () =>
+    Effect.gen(function* () {
+      const first = yield* ask(editRequest([], [])).pipe(Effect.forkScoped)
+      const [pending] = yield* waitForPending(1)
+      yield* reply({ requestID: pending.id, reply: "always" })
+      yield* Fiber.join(first)
+
+      expect(yield* ask(editRequest([], []))).toBeUndefined()
+
+      const second = yield* ask(editRequest(["src/parser.ts"], [])).pipe(Effect.forkScoped)
+      expect(yield* waitForPending(1)).toHaveLength(1)
+      yield* rejectAll()
+      yield* Fiber.await(second)
+    }),
+  { git: true },
+)
+
+it.instance(
+  "reply - always on one request does not auto-approve a pending unfamiliar-file edit",
+  () =>
+    Effect.gen(function* () {
+      const familiar = yield* ask({ ...editRequest([], []), id: PermissionV1.ID.make("per_familiar") }).pipe(
+        Effect.forkScoped,
+      )
+      const unfamiliar = yield* ask({
+        ...editRequest(["src/parser.ts"], []),
+        id: PermissionV1.ID.make("per_unfamiliar"),
+      }).pipe(Effect.forkScoped)
+      yield* waitForPending(2)
+
+      yield* reply({ requestID: PermissionV1.ID.make("per_familiar"), reply: "always" })
+      yield* Fiber.join(familiar)
+
+      const remaining = yield* list()
+      expect(remaining.map((item) => item.id)).toEqual([PermissionV1.ID.make("per_unfamiliar")])
+      yield* rejectAll()
+      yield* Fiber.await(unfamiliar)
+    }),
+  { git: true },
+)
