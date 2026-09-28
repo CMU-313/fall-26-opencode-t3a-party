@@ -85,7 +85,12 @@ describe("GitProvenance.get", () => {
          const first = yield* commit(dir, "a.ts", lines("1", "2", "3", "4", "5", "6"), "create a (#1)")
          const second = yield* commit(dir, "a.ts", lines("1", "two", "3", "4", "5", "6"), "change line two")
          yield* commit(dir, "a.ts", lines("1", "two", "3", "4", "five", "6"), "change line five")
-         const fourth = yield* commit(dir, "a.ts", lines("1", "two", "three", "4", "five", "6"), "closes #7, #8")
+         const fourth = yield* commit(
+           dir,
+           "a.ts",
+           lines("1", "two", "three", "4", "five", "6"),
+           "closes #7, #8; color #fff",
+         )
 
 
          const result = yield* provenance.get("a.ts", 2, 3)
@@ -93,7 +98,7 @@ describe("GitProvenance.get", () => {
 
          expect(result.truncated).toBe(false)
          expect(result.commits.map((item) => item.hash)).toEqual([fourth, second, first])
-         expect(result.commits[0]).toMatchObject({ subject: "closes #7, #8", issueRefs: [7, 8] })
+         expect(result.commits[0]).toMatchObject({ subject: "closes #7, #8; color #fff", issueRefs: [7, 8] })
          expect(result.commits[2].issueRefs).toEqual([1])
          expect(Number.isNaN(Date.parse(result.commits[0].date))).toBe(false)
        }),
@@ -165,6 +170,20 @@ describe("GitProvenance.get", () => {
    ),
  )
 
+
+ it.live("reports no history for a file in a non-git project without crashing", () =>
+   provideTmpdirInstance((dir) =>
+     Effect.gen(function* () {
+       const provenance = yield* GitProvenance.Service
+       yield* Effect.promise(() => Bun.write(path.join(dir, "a.ts"), lines("1")))
+
+       const block = yield* provenance.context(["a.ts:1"])
+
+       expect(block).toContain("Git history is unavailable")
+       expect(block).toContain("not a git repository")
+     }),
+   ),
+ )
 
  it.live("reports a genuine git failure as git-failed instead of an empty history", () =>
    provideTmpdirInstance(
