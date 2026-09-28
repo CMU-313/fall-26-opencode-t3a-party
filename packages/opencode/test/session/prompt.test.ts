@@ -5,6 +5,7 @@ import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { SessionProjector } from "@opencode-ai/core/session/projector"
 import { eq } from "drizzle-orm"
 import { EventV2Bridge } from "@/event-v2-bridge"
+import { $ } from "bun"
 import { expect } from "bun:test"
 import { Cause, Deferred, Duration, Effect, Exit, Fiber, Layer } from "effect"
 import path from "path"
@@ -13,6 +14,7 @@ import { NamedError } from "@opencode-ai/core/util/error"
 import { Agent as AgentSvc } from "../../src/agent/agent"
 import { BackgroundJob } from "@/background/job"
 import { Command } from "../../src/command"
+import { GitProvenance } from "../../src/git/provenance"
 import { Config } from "@/config/config"
 import { LSP } from "@/lsp/lsp"
 import { MCP } from "../../src/mcp"
@@ -1814,6 +1816,45 @@ unix(
       }),
     ),
   30_000,
+)
+
+
+it.instance(
+ "explain command sends git history for the requested range to the model",
+ () =>
+   Effect.gen(function* () {
+     const { dir, llm } = yield* useServerConfig(providerCfg)
+     const git = (...args: string[]) =>
+       Effect.promise(async () => (await $`git ${args}`.cwd(dir).quiet().text()).trim())
+     const commit = (content: string, message: string) =>
+       Effect.gen(function* () {
+         yield* Effect.promise(() => Bun.write(path.join(dir, "a.ts"), content))
+         yield* git("add", "--", "a.ts")
+         yield* git("commit", "-m", message)
+         return yield* git("rev-parse", "HEAD")
+       })
+     const first = yield* commit("1\n2\n3\n4\n", "create a (#1)")
+     yield* commit("1\n2\n3\nfour\n", "change line four")
+     const third = yield* commit("1\ntwo\n3\nfour\n", "change line two (#2)")
+
+
+     const { prompt, chat } = yield* boot()
+     yield* llm.text("done")
+
+
+     yield* prompt.command({ sessionID: chat.id, command: "explain", arguments: "a.ts:2-3" })
+
+
+     const sent = JSON.stringify((yield* llm.inputs).at(-1)?.messages)
+     expect(sent).toContain(GitProvenance.HEADER)
+     expect(sent).toContain(third)
+     expect(sent).toContain(first)
+     expect(sent).toContain("### Why it is structured this way")
+     expect(sent.indexOf(third)).toBeLessThan(sent.indexOf(first))
+     expect(sent).not.toContain("change line four")
+   }),
+ { git: true },
+ 30_000,
 )
 
 unixNoLLMServer(
