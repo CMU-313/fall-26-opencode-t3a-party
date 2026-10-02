@@ -11,12 +11,21 @@ import { Agent } from "../../src/agent/agent"
 import { EventV2Bridge } from "../../src/event-v2-bridge"
 import { Truncate } from "@/tool/truncate"
 import { TestInstance } from "../fixture/fixture"
+import { Familiarity } from "@/tool/familiarity"
 import { SessionID, MessageID } from "../../src/session/schema"
 import { testEffect } from "../lib/effect"
 
 const it = testEffect(
   LayerNode.compile(
-    LayerNode.group([LSP.node, FSUtil.node, Format.node, EventV2Bridge.node, Truncate.node, Agent.node]),
+    LayerNode.group([
+      LSP.node,
+      FSUtil.node,
+      Format.node,
+      EventV2Bridge.node,
+      Truncate.node,
+      Agent.node,
+      Familiarity.node,
+    ]),
   ),
 )
 
@@ -46,6 +55,7 @@ type AskInput = {
       deletions: number
       movePath?: string
     }>
+    unfamiliarFiles: string[]
   }
 }
 
@@ -525,5 +535,119 @@ EOF`
       // Result has ASCII quotes because that's what the patch specifies
       expect(yield* readText(target)).toBe(`He said "hi"\nsome${emDash}dash\nend\n`)
     }),
+  )
+})
+
+describe("tool.apply_patch familiarity", () => {
+  const markFamiliar = (file: string) => Familiarity.Service.use((familiarity) => familiarity.markFamiliar(file))
+  const isFamiliar = (file: string) => Familiarity.Service.use((familiarity) => familiarity.isFamiliar(file))
+
+  const threeFilePatch =
+    "*** Begin Patch\n" +
+    "*** Update File: src/index.ts\n@@\n-index\n+index2\n" +
+    "*** Update File: src/parser.ts\n@@\n-parser\n+parser2\n" +
+    "*** Add File: tests/parser.ts\n+test\n" +
+    "*** End Patch"
+
+  const setup = Effect.fn("ApplyPatchFamiliarityTest.setup")(function* () {
+    const test = yield* TestInstance
+    yield* Effect.promise(() => fs.mkdir(path.join(test.directory, "src"), { recursive: true }))
+    yield* writeText(path.join(test.directory, "src", "index.ts"), "index\n")
+    yield* writeText(path.join(test.directory, "src", "parser.ts"), "parser\n")
+    return test.directory
+  })
+
+  it.instance(
+    "a mixed patch names only its unfamiliar files",
+    () =>
+      Effect.gen(function* () {
+        const dir = yield* setup()
+        yield* markFamiliar(path.join(dir, "src", "index.ts"))
+        const { ctx, calls } = makeCtx()
+
+        yield* execute({ patchText: threeFilePatch }, ctx)
+        expect(calls[0].metadata.unfamiliarFiles).toEqual(["src/parser.ts", "tests/parser.ts"])
+      }),
+    { git: true },
+  )
+
+  it.instance(
+    "a patch touching only familiar files carries no unfamiliar files",
+    () =>
+      Effect.gen(function* () {
+        const dir = yield* setup()
+        yield* markFamiliar(path.join(dir, "src", "index.ts"))
+        yield* markFamiliar(path.join(dir, "src", "parser.ts"))
+        const { ctx, calls } = makeCtx()
+
+        yield* execute(
+          {
+            patchText:
+              "*** Begin Patch\n*** Update File: src/index.ts\n@@\n-index\n+index2\n" +
+              "*** Update File: src/parser.ts\n@@\n-parser\n+parser2\n*** End Patch",
+          },
+          ctx,
+        )
+        expect(calls[0].metadata.unfamiliarFiles).toEqual([])
+      }),
+    { git: true },
+  )
+
+  it.instance(
+    "a move is judged by its source file, and the destination becomes familiar once accepted",
+    () =>
+      Effect.gen(function* () {
+        const dir = yield* setup()
+        yield* markFamiliar(path.join(dir, "src", "parser.ts"))
+        const { ctx, calls } = makeCtx()
+
+        yield* execute(
+          {
+            patchText:
+              "*** Begin Patch\n*** Update File: src/parser.ts\n*** Move to: lib/parser.ts\n@@\n-parser\n+parser2\n*** End Patch",
+          },
+          ctx,
+        )
+        expect(calls[0].metadata.unfamiliarFiles).toEqual([])
+        expect(yield* isFamiliar(path.join(dir, "lib", "parser.ts"))).toBe(true)
+      }),
+    { git: true },
+  )
+
+  it.instance(
+    "an accepted patch makes its files familiar, except deleted ones",
+    () =>
+      Effect.gen(function* () {
+        const dir = yield* setup()
+        yield* writeText(path.join(dir, "old.ts"), "old\n")
+        const { ctx } = makeCtx()
+
+        yield* execute(
+          {
+            patchText:
+              "*** Begin Patch\n*** Update File: src/parser.ts\n@@\n-parser\n+parser2\n" +
+              "*** Add File: tests/parser.ts\n+test\n*** Delete File: old.ts\n*** End Patch",
+          },
+          ctx,
+        )
+        expect(yield* isFamiliar(path.join(dir, "src", "parser.ts"))).toBe(true)
+        expect(yield* isFamiliar(path.join(dir, "tests", "parser.ts"))).toBe(true)
+        expect(yield* isFamiliar(path.join(dir, "old.ts"))).toBe(false)
+      }),
+    { git: true },
+  )
+
+  it.instance(
+    "a rejected patch leaves its files unfamiliar",
+    () =>
+      Effect.gen(function* () {
+        const dir = yield* setup()
+        const rejecting = { ...makeCtx().ctx, ask: () => Effect.die(new Error("rejected")) }
+
+        yield* execute({ patchText: threeFilePatch }, rejecting).pipe(Effect.exit)
+        expect(yield* isFamiliar(path.join(dir, "src", "index.ts"))).toBe(false)
+        expect(yield* isFamiliar(path.join(dir, "tests", "parser.ts"))).toBe(false)
+      }),
+    { git: true },
   )
 })

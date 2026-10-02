@@ -19,7 +19,7 @@ import { usePathFormatter } from "../../context/path-format"
 
 type PermissionStage = "permission" | "always" | "reject"
 
-function EditBody(props: { request: PermissionRequest }) {
+export function EditBody(props: { request: PermissionRequest }) {
   const themeState = useTheme()
   const theme = themeState.theme
   const syntax = themeState.syntax
@@ -34,6 +34,10 @@ function EditBody(props: { request: PermissionRequest }) {
     const value = props.request.metadata?.diff
     return typeof value === "string" ? value : ""
   })
+  const unfamiliarFiles = createMemo(() => {
+    const value = props.request.metadata?.unfamiliarFiles
+    return Array.isArray(value) ? value.filter((file): file is string => typeof file === "string") : []
+  })
 
   const view = createMemo(() => {
     const diffStyle = config.diff_style
@@ -46,6 +50,14 @@ function EditBody(props: { request: PermissionRequest }) {
 
   return (
     <box flexDirection="column" gap={1}>
+      <Show when={unfamiliarFiles().length > 0}>
+        <box flexDirection="column" paddingLeft={1} flexShrink={0}>
+          <text fg={theme.warning}>△ Unfamiliar files</text>
+          <text fg={theme.text}>This AI-proposed change modifies files you have not previously read or edited:</text>
+          <For each={unfamiliarFiles()}>{(file) => <text fg={theme.text}>{"  • " + file}</text>}</For>
+          <text fg={theme.textMuted}>Review these changes carefully before accepting.</text>
+        </box>
+      </Show>
       <Show when={diff()}>
         <scrollbox
           height="100%"

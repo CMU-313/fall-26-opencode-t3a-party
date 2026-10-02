@@ -81,7 +81,7 @@ const layer = Layer.effect(
         needsAsk = true
       }
 
-      if (!needsAsk) return
+      if (!needsAsk && !hasUnfamiliarFiles(request.metadata)) return
 
       const id = request.id ?? PermissionV1.ID.ascending()
       const info: PermissionV1.Request = {
@@ -155,7 +155,7 @@ const layer = Layer.effect(
         const ok = item.info.patterns.every(
           (pattern) => evaluate(item.info.permission, pattern, approved).action === "allow",
         )
-        if (!ok) continue
+        if (!ok || hasUnfamiliarFiles(item.info.metadata)) continue
         pending.delete(id)
         yield* events.publish(Event.Replied, {
           sessionID: item.info.sessionID,
@@ -174,6 +174,13 @@ const layer = Layer.effect(
     return Service.of({ ask, reply, list })
   }),
 )
+
+// An AI edit that touches files the student has not read or edited must reach the student even when a rule or
+// an earlier "always" reply would allow it silently. Deny rules are checked first and still win.
+function hasUnfamiliarFiles(metadata: Record<string, unknown> | undefined) {
+  const files = metadata?.unfamiliarFiles
+  return Array.isArray(files) && files.length > 0
+}
 
 function expand(pattern: string): string {
   if (pattern.startsWith("~/")) return os.homedir() + pattern.slice(1)

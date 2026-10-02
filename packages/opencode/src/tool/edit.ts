@@ -16,6 +16,7 @@ import { Format } from "../format"
 import { InstanceState } from "@/effect/instance-state"
 import { Snapshot } from "@/snapshot"
 import { assertExternalDirectoryEffect } from "./external-directory"
+import { Familiarity } from "./familiarity"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import * as Bom from "@/util/bom"
 
@@ -62,6 +63,7 @@ export const EditTool = Tool.define(
     const afs = yield* FSUtil.Service
     const format = yield* Format.Service
     const events = yield* EventV2Bridge.Service
+    const familiarity = yield* Familiarity.Service
 
     return {
       description: DESCRIPTION,
@@ -81,6 +83,9 @@ export const EditTool = Tool.define(
             ? params.filePath
             : path.join(instance.directory, params.filePath)
           yield* assertExternalDirectoryEffect(ctx, filePath)
+          const unfamiliarFiles = (yield* familiarity.isFamiliar(filePath))
+            ? []
+            : [path.relative(instance.worktree, filePath)]
 
           let diff = ""
           let contentOld = ""
@@ -106,8 +111,10 @@ export const EditTool = Tool.define(
                   metadata: {
                     filepath: filePath,
                     diff,
+                    unfamiliarFiles,
                   },
                 })
+                yield* familiarity.markFamiliar(filePath)
                 yield* afs.writeWithDirs(filePath, Bom.join(contentNew, desiredBom))
                 if (yield* format.file(filePath)) {
                   contentNew = yield* Bom.syncFile(afs, filePath, desiredBom)
@@ -149,8 +156,10 @@ export const EditTool = Tool.define(
                 metadata: {
                   filepath: filePath,
                   diff,
+                  unfamiliarFiles,
                 },
               })
+              yield* familiarity.markFamiliar(filePath)
 
               yield* afs.writeWithDirs(filePath, Bom.join(contentNew, desiredBom))
               if (yield* format.file(filePath)) {
