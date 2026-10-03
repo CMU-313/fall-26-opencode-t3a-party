@@ -131,6 +131,16 @@ Exit OpenCode. _Aliases_: `/quit`, `/q`
 
 ---
 
+### explain
+
+Explain a file or symbol in the context of the whole project. The response is split into what the code does, where it is used elsewhere in the project, and why it is structured that way. If nothing else in the project calls it, the response says so. Only the project's own source files are searched, not dependencies like `node_modules`.
+
+```bash frame="none"
+/explain src/session/prompt.ts
+```
+
+---
+
 ### export
 
 Export current conversation to Markdown and open in your default editor. Uses the editor set in your `EDITOR` environment variable. [Learn more](#editor-setup).
