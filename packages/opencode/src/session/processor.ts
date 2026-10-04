@@ -9,6 +9,7 @@ import { Config } from "@/config/config"
 import { Permission } from "@/permission"
 import { Plugin } from "@/plugin"
 import { Snapshot } from "@/snapshot"
+import { Familiarity } from "@/familiarity"
 import { Session } from "./session"
 import { LLM } from "./llm"
 import { MessageV2 } from "./message-v2"
@@ -84,6 +85,7 @@ const layer = Layer.effect(
     const session = yield* Session.Service
     const config = yield* Config.Service
     const snapshot = yield* Snapshot.Service
+    const familiarity = yield* Familiarity.Service
     const agents = yield* Agent.Service
     const llm = yield* LLM.Service
     const permission = yield* Permission.Service
@@ -100,6 +102,8 @@ const layer = Layer.effect(
       // may execute tools internally before emitting start-step events,
       // so capturing inside the event handler can be too late.
       const initialSnapshot = yield* snapshot.track()
+      // Between the last AI step and this turn's start, any file changes were the student's: mark them familiar.
+      yield* familiarity.markBetweenTurns(input.sessionID, initialSnapshot)
       const ctx: ProcessorContext = {
         assistantMessage: input.assistantMessage,
         sessionID: input.sessionID,
@@ -434,6 +438,8 @@ const layer = Layer.effect(
 
           case "step-finish": {
             const completedSnapshot = yield* snapshot.track()
+            // Remember where the AI left the tree so the next turn can attribute later changes to the student.
+            yield* familiarity.recordAiSnapshot(completedSnapshot)
             yield* Effect.forEach(Object.keys(ctx.reasoningMap), finishReasoning)
             const usage = Session.getUsage({
               model: ctx.model,
@@ -703,6 +709,7 @@ export const node = LayerNode.make({
     Session.node,
     Config.node,
     Snapshot.node,
+    Familiarity.node,
     Agent.node,
     LLM.node,
     Permission.node,

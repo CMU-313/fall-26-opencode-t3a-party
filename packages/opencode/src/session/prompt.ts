@@ -33,6 +33,7 @@ import { NamedError } from "@opencode-ai/core/util/error"
 import { SessionProcessor } from "./processor"
 import { Tool } from "@/tool/tool"
 import { Permission } from "@/permission"
+import { Familiarity } from "@/familiarity"
 import { SessionStatus } from "./status"
 import { LLM } from "./llm"
 import { Shell } from "@opencode-ai/core/shell"
@@ -123,6 +124,7 @@ const layer = Layer.effect(
     const commands = yield* Command.Service
     const config = yield* Config.Service
     const permission = yield* Permission.Service
+    const familiarity = yield* Familiarity.Service
     const fsys = yield* FSUtil.Service
     const mcp = yield* MCP.Service
     const lsp = yield* LSP.Service
@@ -867,6 +869,8 @@ const layer = Layer.effect(
                 )
                 if (Exit.isSuccess(exit)) {
                   const result = exit.value
+                  // The student @-mentioned this file, so they have read it: mark it familiar.
+                  yield* familiarity.markFamiliar(filepath)
                   pieces.push({
                     messageID: info.id,
                     sessionID: input.sessionID,
@@ -1609,6 +1613,7 @@ export const node = LayerNode.make({
     Command.node,
     Config.node,
     Permission.node,
+    Familiarity.node,
     FSUtil.node,
     MCP.node,
     LSP.node,
