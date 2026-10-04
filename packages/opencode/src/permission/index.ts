@@ -58,7 +58,7 @@ const layer = Layer.effect(
           editID: info.id,
           decision,
         })
-        .pipe(Effect.catchCause((cause: Cause.Cause<never>) => Effect.logError("failed to record edit decision", { cause })))
+        .pipe(Effect.catchCause((cause) => Effect.logError("failed to record edit decision", { cause })))
     })
     const state = yield* InstanceState.make<State>(
       Effect.fn("Permission.state")(function* (ctx) {
