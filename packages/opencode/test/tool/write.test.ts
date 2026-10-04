@@ -14,7 +14,7 @@ import { Agent } from "../../src/agent/agent"
 import { SessionID, MessageID } from "../../src/session/schema"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { disposeAllInstances, TestInstance } from "../fixture/fixture"
-import { Familiarity } from "@/tool/familiarity"
+import { Familiarity } from "@/familiarity"
 import { testEffect } from "../lib/effect"
 
 const ctx = {
@@ -296,17 +296,17 @@ describe("tool.write familiarity", () => {
   }
 
   const put = (file: string, content: string) => Effect.promise(() => fs.writeFile(file, content))
-  const isFamiliar = (file: string) => Familiarity.Service.use((familiarity) => familiarity.isFamiliar(file))
+  const unfamiliar = (files: string[]) => Familiarity.Service.use((familiarity) => familiarity.unfamiliar(files))
 
   it.instance(
-    "writing a new file counts as unfamiliar",
+    "writing a new file is never unfamiliar",
     () =>
       Effect.gen(function* () {
         const test = yield* TestInstance
         const { asks, recording } = recordAsks()
 
         yield* run({ filePath: path.join(test.directory, "new.ts"), content: "export {}\n" }, recording)
-        expect(asks[0].metadata.unfamiliarFiles).toEqual(["new.ts"])
+        expect(asks[0].metadata.unfamiliarFiles).toEqual([])
       }),
     { git: true },
   )
@@ -321,7 +321,7 @@ describe("tool.write familiarity", () => {
         const { asks, recording } = recordAsks()
 
         yield* run({ filePath: file, content: "new\n" }, recording)
-        expect(asks[0].metadata.unfamiliarFiles).toEqual(["existing.ts"])
+        expect(asks[0].metadata.unfamiliarFiles).toEqual([file])
       }),
     { git: true },
   )
@@ -349,12 +349,14 @@ describe("tool.write familiarity", () => {
         const test = yield* TestInstance
         const accepted = path.join(test.directory, "accepted.ts")
         const rejected = path.join(test.directory, "rejected.ts")
+        // Pre-create the rejected target so unfamiliar() can report it (new files are always exempt).
+        yield* put(rejected, "orig\n")
         const rejecting = { ...ctx, ask: () => Effect.die(new Error("rejected")) }
 
         yield* run({ filePath: accepted, content: "a\n" })
         yield* run({ filePath: rejected, content: "b\n" }, rejecting).pipe(Effect.exit)
-        expect(yield* isFamiliar(accepted)).toBe(true)
-        expect(yield* isFamiliar(rejected)).toBe(false)
+        expect(yield* unfamiliar([accepted])).toEqual([])
+        expect(yield* unfamiliar([rejected])).toEqual([rejected])
       }),
     { git: true },
   )

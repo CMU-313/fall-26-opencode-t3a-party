@@ -11,7 +11,7 @@ import { Agent } from "../../src/agent/agent"
 import { EventV2Bridge } from "../../src/event-v2-bridge"
 import { Truncate } from "@/tool/truncate"
 import { TestInstance } from "../fixture/fixture"
-import { Familiarity } from "@/tool/familiarity"
+import { Familiarity } from "@/familiarity"
 import { SessionID, MessageID } from "../../src/session/schema"
 import { testEffect } from "../lib/effect"
 
@@ -540,7 +540,7 @@ EOF`
 
 describe("tool.apply_patch familiarity", () => {
   const markFamiliar = (file: string) => Familiarity.Service.use((familiarity) => familiarity.markFamiliar(file))
-  const isFamiliar = (file: string) => Familiarity.Service.use((familiarity) => familiarity.isFamiliar(file))
+  const unfamiliar = (files: string[]) => Familiarity.Service.use((familiarity) => familiarity.unfamiliar(files))
 
   const threeFilePatch =
     "*** Begin Patch\n" +
@@ -566,7 +566,8 @@ describe("tool.apply_patch familiarity", () => {
         const { ctx, calls } = makeCtx()
 
         yield* execute({ patchText: threeFilePatch }, ctx)
-        expect(calls[0].metadata.unfamiliarFiles).toEqual(["src/parser.ts", "tests/parser.ts"])
+        // tests/parser.ts is an add (does not exist yet), so it is exempt; only the existing src/parser.ts is named.
+        expect(calls[0].metadata.unfamiliarFiles).toEqual([path.join(dir, "src", "parser.ts")])
       }),
     { git: true },
   )
@@ -609,7 +610,7 @@ describe("tool.apply_patch familiarity", () => {
           ctx,
         )
         expect(calls[0].metadata.unfamiliarFiles).toEqual([])
-        expect(yield* isFamiliar(path.join(dir, "lib", "parser.ts"))).toBe(true)
+        expect(yield* unfamiliar([path.join(dir, "lib", "parser.ts")])).toEqual([])
       }),
     { git: true },
   )
@@ -630,9 +631,9 @@ describe("tool.apply_patch familiarity", () => {
           },
           ctx,
         )
-        expect(yield* isFamiliar(path.join(dir, "src", "parser.ts"))).toBe(true)
-        expect(yield* isFamiliar(path.join(dir, "tests", "parser.ts"))).toBe(true)
-        expect(yield* isFamiliar(path.join(dir, "old.ts"))).toBe(false)
+        expect(yield* unfamiliar([path.join(dir, "src", "parser.ts")])).toEqual([])
+        expect(yield* unfamiliar([path.join(dir, "tests", "parser.ts")])).toEqual([])
+        // old.ts was deleted, so it no longer exists and is exempt from unfamiliar() either way.
       }),
     { git: true },
   )
@@ -645,8 +646,9 @@ describe("tool.apply_patch familiarity", () => {
         const rejecting = { ...makeCtx().ctx, ask: () => Effect.die(new Error("rejected")) }
 
         yield* execute({ patchText: threeFilePatch }, rejecting).pipe(Effect.exit)
-        expect(yield* isFamiliar(path.join(dir, "src", "index.ts"))).toBe(false)
-        expect(yield* isFamiliar(path.join(dir, "tests", "parser.ts"))).toBe(false)
+        // src/index.ts exists and was never accepted, so it stays unfamiliar. tests/parser.ts was an add that
+        // never got written, so it does not exist and is exempt.
+        expect(yield* unfamiliar([path.join(dir, "src", "index.ts")])).toEqual([path.join(dir, "src", "index.ts")])
       }),
     { git: true },
   )

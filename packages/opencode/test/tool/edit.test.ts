@@ -12,7 +12,7 @@ import {
   tmpdirScoped,
 } from "../fixture/fixture"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
-import { Familiarity } from "@/tool/familiarity"
+import { Familiarity } from "@/familiarity"
 import { LSP } from "@/lsp/lsp"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { Format } from "../../src/format"
@@ -607,7 +607,7 @@ describe("tool.edit familiarity", () => {
   }
 
   const markFamiliar = (file: string) => Familiarity.Service.use((familiarity) => familiarity.markFamiliar(file))
-  const isFamiliar = (file: string) => Familiarity.Service.use((familiarity) => familiarity.isFamiliar(file))
+  const unfamiliar = (files: string[]) => Familiarity.Service.use((familiarity) => familiarity.unfamiliar(files))
 
   it.instance(
     "an edit to a familiar file carries no unfamiliar files",
@@ -635,13 +635,13 @@ describe("tool.edit familiarity", () => {
         const { asks, recording } = recordAsks()
 
         yield* run({ filePath: file, oldString: "1", newString: "2" }, recording)
-        expect(asks[0].metadata.unfamiliarFiles).toEqual([path.join("src", "parser.ts")])
+        expect(asks[0].metadata.unfamiliarFiles).toEqual([file])
       }),
     { git: true },
   )
 
   it.instance(
-    "creating a new file counts as unfamiliar",
+    "creating a new file is never unfamiliar",
     () =>
       Effect.gen(function* () {
         const test = yield* TestInstance
@@ -649,22 +649,20 @@ describe("tool.edit familiarity", () => {
         const { asks, recording } = recordAsks()
 
         yield* run({ filePath: file, oldString: "", newString: "export {}\n" }, recording)
-        expect(asks[0].metadata.unfamiliarFiles).toEqual(["created.ts"])
+        expect(asks[0].metadata.unfamiliarFiles).toEqual([])
       }),
     { git: true },
   )
 
   it.instance(
-    "a file the student edited themselves is familiar",
+    "a file the student edited themselves is seeded familiar at startup",
     () =>
       Effect.gen(function* () {
         const test = yield* TestInstance
         const file = path.join(test.directory, "mine.ts")
+        // An uncommitted change the student made before the session; the startup seed should recognize it.
         yield* put(file, "const a = 1\n")
-        const events = yield* EventV2Bridge.Service
         yield* Familiarity.Service.use((familiarity) => familiarity.init())
-        yield* events.publish(Watcher.Event.Updated, { file, event: "change" })
-        for (let i = 0; i < 50 && !(yield* isFamiliar(file)); i++) yield* Effect.sleep("10 millis")
         const { asks, recording } = recordAsks()
 
         yield* run({ filePath: file, oldString: "1", newString: "2" }, recording)
@@ -684,7 +682,7 @@ describe("tool.edit familiarity", () => {
 
         yield* run({ filePath: file, oldString: "1", newString: "2" }, recording)
         yield* run({ filePath: file, oldString: "2", newString: "3" }, recording)
-        expect(asks[0].metadata.unfamiliarFiles).toEqual(["a.ts"])
+        expect(asks[0].metadata.unfamiliarFiles).toEqual([file])
         expect(asks[1].metadata.unfamiliarFiles).toEqual([])
       }),
     { git: true },
@@ -700,7 +698,7 @@ describe("tool.edit familiarity", () => {
         const rejecting = { ...ctx, ask: () => Effect.die(new Error("rejected")) }
 
         yield* run({ filePath: file, oldString: "1", newString: "2" }, rejecting).pipe(Effect.exit)
-        expect(yield* isFamiliar(file)).toBe(false)
+        expect(yield* unfamiliar([file])).toEqual([file])
         expect(yield* load(file)).toBe("const a = 1\n")
       }),
     { git: true },
@@ -718,7 +716,7 @@ describe("tool.edit familiarity", () => {
         { filePath: path.join(projectB, "src", "foo.ts"), oldString: "1", newString: "2" },
         recording,
       ).pipe(provideInstance(projectB))
-      expect(asks[0].metadata.unfamiliarFiles).toEqual([path.join("src", "foo.ts")])
+      expect(asks[0].metadata.unfamiliarFiles).toEqual([path.join(projectB, "src", "foo.ts")])
     }),
   )
 })

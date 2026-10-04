@@ -5,6 +5,7 @@ import { mkdir } from "node:fs/promises"
 import path from "node:path"
 import type { PermissionRequest } from "@opencode-ai/sdk/v2"
 import { KVProvider } from "../../../src/context/kv"
+import { LocationProvider } from "../../../src/context/location"
 import { ThemeProvider } from "../../../src/context/theme"
 import { TuiConfigProvider } from "../../../src/config"
 import { EditBody } from "../../../src/routes/session/permission"
@@ -43,7 +44,9 @@ async function renderEditBody(input: PermissionRequest) {
         <TuiConfigProvider config={createTuiResolvedConfig()}>
           <KVProvider>
             <ThemeProvider mode="dark">
-              <EditBody request={input} />
+              <LocationProvider>
+                <EditBody request={input} />
+              </LocationProvider>
             </ThemeProvider>
           </KVProvider>
         </TuiConfigProvider>
