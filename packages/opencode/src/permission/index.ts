@@ -6,6 +6,7 @@ import { Deferred, Effect, Layer, Context } from "effect"
 import os from "os"
 import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { EventV2Bridge } from "@/event-v2-bridge"
+import { FamiliarityMetadata } from "@/familiarity/metadata"
 
 export const Event = PermissionV1.Event
 
@@ -23,6 +24,9 @@ interface PendingEntry {
 interface State {
   pending: Map<PermissionV1.ID, PendingEntry>
   approved: PermissionV1.Rule[]
+  // Set once the student replies "always" to a forced unfamiliar-file prompt: further unfamiliar edits that the
+  // rules already allow are then auto-allowed (with a one-line notice) instead of prompting again.
+  allowUnfamiliar: boolean
 }
 
 export function evaluate(permission: string, pattern: string, ...rulesets: PermissionV1.Ruleset[]): PermissionV1.Rule {
@@ -46,9 +50,10 @@ const layer = Layer.effect(
     const state = yield* InstanceState.make<State>(
       Effect.fn("Permission.state")(function* (ctx) {
         void ctx
-        const state = {
+        const state: State = {
           pending: new Map<PermissionV1.ID, PendingEntry>(),
           approved: [],
+          allowUnfamiliar: false,
         }
 
         yield* Effect.addFinalizer(() =>
@@ -65,7 +70,8 @@ const layer = Layer.effect(
     )
 
     const ask = Effect.fn("Permission.ask")(function* (input: PermissionV1.AskInput) {
-      const { approved, pending } = yield* InstanceState.get(state)
+      const current = yield* InstanceState.get(state)
+      const { approved, pending } = current
       const { ruleset, ...request } = input
       let needsAsk = false
 
@@ -81,15 +87,37 @@ const layer = Layer.effect(
         needsAsk = true
       }
 
-      if (!needsAsk && !hasUnfamiliarFiles(request.metadata)) return
+      const unfamiliar = FamiliarityMetadata.files(request.metadata).length > 0
+      if (!needsAsk) {
+        if (!unfamiliar) return
+        // The student chose "always allow AI edits on unfamiliar files": let the edit through without a prompt,
+        // but still publish a one-line notice so they know an unfamiliar file was touched.
+        if (current.allowUnfamiliar) {
+          yield* events.publish(Event.Asked, {
+            id: request.id ?? PermissionV1.ID.ascending(),
+            sessionID: request.sessionID,
+            permission: request.permission,
+            patterns: request.patterns,
+            metadata: { ...request.metadata, [FamiliarityMetadata.AUTO_ALLOWED_KEY]: true },
+            always: request.always,
+            tool: request.tool,
+          })
+          return
+        }
+      }
 
       const id = request.id ?? PermissionV1.ID.ascending()
+      // Flag prompts the rules alone would have allowed, so the UI can explain why an "allowed" edit still stops.
+      const forced = !needsAsk && unfamiliar
+      const metadata = forced
+        ? { ...request.metadata, [FamiliarityMetadata.FORCED_KEY]: true }
+        : request.metadata
       const info: PermissionV1.Request = {
         id,
         sessionID: request.sessionID,
         permission: request.permission,
         patterns: request.patterns,
-        metadata: request.metadata,
+        metadata,
         always: request.always,
         tool: request.tool,
       }
@@ -107,7 +135,8 @@ const layer = Layer.effect(
     })
 
     const reply = Effect.fn("Permission.reply")(function* (input: PermissionV1.ReplyInput) {
-      const { approved, pending } = yield* InstanceState.get(state)
+      const current = yield* InstanceState.get(state)
+      const { approved, pending } = current
       const existing = pending.get(input.requestID)
       if (!existing) return yield* new PermissionV1.NotFoundError({ requestID: input.requestID })
 
@@ -142,6 +171,9 @@ const layer = Layer.effect(
       yield* Deferred.succeed(existing.deferred, undefined)
       if (input.reply === "once") return
 
+      // "Always" on a forced unfamiliar-file prompt also opts into allowing future unfamiliar edits silently.
+      if (FamiliarityMetadata.forced(existing.info.metadata)) current.allowUnfamiliar = true
+
       for (const pattern of existing.info.always) {
         approved.push({
           permission: existing.info.permission,
@@ -155,7 +187,10 @@ const layer = Layer.effect(
         const ok = item.info.patterns.every(
           (pattern) => evaluate(item.info.permission, pattern, approved).action === "allow",
         )
-        if (!ok || hasUnfamiliarFiles(item.info.metadata)) continue
+        // Once the student has opted in, pending unfamiliar edits no longer need to keep asking.
+        const blockedByUnfamiliar =
+          !current.allowUnfamiliar && FamiliarityMetadata.files(item.info.metadata).length > 0
+        if (!ok || blockedByUnfamiliar) continue
         pending.delete(id)
         yield* events.publish(Event.Replied, {
           sessionID: item.info.sessionID,
@@ -175,12 +210,9 @@ const layer = Layer.effect(
   }),
 )
 
-// An AI edit that touches files the student has not read or edited must reach the student even when a rule or
-// an earlier "always" reply would allow it silently. Deny rules are checked first and still win.
-function hasUnfamiliarFiles(metadata: Record<string, unknown> | undefined) {
-  const files = metadata?.unfamiliarFiles
-  return Array.isArray(files) && files.length > 0
-}
+// An AI edit that touches files the student has not read or edited must reach the student even when a rule or an
+// earlier "always" reply would allow it silently (see FamiliarityMetadata). Deny rules are checked first and still
+// win.
 
 function expand(pattern: string): string {
   if (pattern.startsWith("~/")) return os.homedir() + pattern.slice(1)
