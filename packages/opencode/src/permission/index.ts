@@ -44,7 +44,7 @@ const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const events = yield* EventV2Bridge.Service
-        const decisions = yield* EditDecision.Service
+    const decisions = yield* EditDecision.Service
 
     const recordEditDecision = Effect.fn("Permission.recordEditDecision")(function* (
       info: PermissionV1.Request,

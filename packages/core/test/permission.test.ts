@@ -342,6 +342,24 @@ describe("EditDecision tracking", () => {
     }),
   )
 
+  it.effect("records an accepted decision when an edit is approved with always", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      const { service, fiber, request } = yield* waitForRequest(editAssertion({ save: ["src/index.ts"] }))
+      yield* service.reply({ requestID: request.id, reply: "always" })
+      yield* Fiber.join(fiber)
+
+      const decisions = yield* EditDecision.Service
+      const rows = yield* decisions.forSession(request.sessionID)
+      expect(rows).toHaveLength(1)
+      expect(rows[0]).toMatchObject({
+        sessionID: request.sessionID,
+        editID: request.id,
+        decision: "accepted",
+      })
+    }),
+  )
+
   it.effect("records a rejected decision when an edit is declined", () =>
     Effect.gen(function* () {
       yield* setup()
