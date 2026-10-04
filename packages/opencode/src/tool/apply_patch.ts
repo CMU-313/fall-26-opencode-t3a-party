@@ -311,6 +311,8 @@ export const ApplyPatchTool = Tool.define(
           diagnostics,
           // Lets the UI show an inline banner when this patch touched files the student had not read or edited.
           unfamiliarFiles,
+          // Lets the UI note brand-new files the AI created that the student is reviewing for the first time.
+          createdFiles: fileChanges.filter((c) => c.type === "add").map((c) => c.filePath),
         },
         output,
       }

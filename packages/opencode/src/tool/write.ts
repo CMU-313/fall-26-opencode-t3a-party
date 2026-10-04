@@ -102,6 +102,8 @@ export const WriteTool = Tool.define(
               exists: exists,
               // Lets the UI show an inline banner when this write touched files the student had not read or edited.
               unfamiliarFiles,
+              // Lets the UI note when the AI created a brand-new file the student is reviewing for the first time.
+              createdFiles: exists ? [] : [filepath],
             },
             output,
           }

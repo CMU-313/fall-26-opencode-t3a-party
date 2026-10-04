@@ -1714,7 +1714,7 @@ function TextPart(props: { last: boolean; part: TextPart; message: AssistantMess
 
 // Pending messages moved to individual tool pending functions
 
-function UnfamiliarBanner(props: { files: string[] }) {
+function EditNoticeBanner(props: { label: string; files: string[] }) {
   const { theme } = useTheme()
   const pathFormatter = usePathFormatter()
   return (
@@ -1726,10 +1726,15 @@ function UnfamiliarBanner(props: { files: string[] }) {
       flexShrink={0}
     >
       <text fg={theme.warning}>
-        {"△ AI edited files you have not read or edited: " + props.files.map((f) => pathFormatter.format(f)).join(", ")}
+        {"△ " + props.label + ": " + props.files.map((f) => pathFormatter.format(f)).join(", ")}
       </text>
     </box>
   )
+}
+
+const toolFiles = (part: ToolPart, key: string) => {
+  const value = part.state.status === "completed" ? part.state.metadata?.[key] : undefined
+  return Array.isArray(value) ? value.filter((file): file is string => typeof file === "string") : []
 }
 
 function ToolPart(props: { last: boolean; part: ToolPart; message: AssistantMessage }) {
@@ -1738,10 +1743,10 @@ function ToolPart(props: { last: boolean; part: ToolPart; message: AssistantMess
 
   // Surfaced for any edit that touched files the student had not read or edited — including ones allowed silently
   // after they chose "Always allow AI edits on unfamiliar files". Stays inline under the result, not a toast.
-  const unfamiliarFiles = createMemo(() => {
-    const value = props.part.state.status === "completed" ? props.part.state.metadata?.unfamiliarFiles : undefined
-    return Array.isArray(value) ? value.filter((file): file is string => typeof file === "string") : []
-  })
+  const unfamiliarFiles = createMemo(() => toolFiles(props.part, "unfamiliarFiles"))
+  // Brand-new files the AI created: the student is reviewing the whole file for the first time. Kept as a distinct,
+  // lighter notice so it does not conflate with the unfamiliar-edit warning (which is about partial edits).
+  const createdFiles = createMemo(() => toolFiles(props.part, "createdFiles"))
 
   // Hide tool if showDetails is false and tool completed successfully
   const shouldHide = createMemo(() => {
@@ -1820,7 +1825,17 @@ function ToolPart(props: { last: boolean; part: ToolPart; message: AssistantMess
       </Switch>
     </Show>
     <Show when={unfamiliarFiles().length > 0}>
-      <UnfamiliarBanner files={unfamiliarFiles()} />
+      <EditNoticeBanner label="AI edited files you have not read or edited" files={unfamiliarFiles()} />
+    </Show>
+    <Show when={createdFiles().length > 0}>
+      <EditNoticeBanner
+        label={
+          createdFiles().length === 1
+            ? "AI created a new file you haven't reviewed"
+            : "AI created new files you haven't reviewed"
+        }
+        files={createdFiles()}
+      />
     </Show>
     </>
   )
