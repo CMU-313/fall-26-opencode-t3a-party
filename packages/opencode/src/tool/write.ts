@@ -13,7 +13,7 @@ import { FSUtil } from "@opencode-ai/core/fs-util"
 import { InstanceState } from "@/effect/instance-state"
 import { trimDiff } from "./edit"
 import { assertExternalDirectoryEffect } from "./external-directory"
-import { Familiarity } from "./familiarity"
+import { Familiarity } from "@/familiarity"
 import * as Bom from "@/util/bom"
 
 const MAX_PROJECT_DIAGNOSTICS_FILES = 5
@@ -53,9 +53,7 @@ export const WriteTool = Tool.define(
           const contentNew = next.text
 
           const diff = trimDiff(createTwoFilesPatch(filepath, filepath, contentOld, contentNew))
-          const unfamiliarFiles = (yield* familiarity.isFamiliar(filepath))
-            ? []
-            : [path.relative(instance.worktree, filepath)]
+          const unfamiliarFiles = yield* familiarity.unfamiliar([filepath])
           yield* ctx.ask({
             permission: "edit",
             patterns: [path.relative(instance.worktree, filepath)],

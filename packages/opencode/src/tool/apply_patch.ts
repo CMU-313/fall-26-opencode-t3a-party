@@ -7,7 +7,7 @@ import { InstanceState } from "@/effect/instance-state"
 import { Patch } from "../patch"
 import { createTwoFilesPatch, diffLines } from "diff"
 import { assertExternalDirectoryEffect } from "./external-directory"
-import { Familiarity } from "./familiarity"
+import { Familiarity } from "@/familiarity"
 import { trimDiff } from "./edit"
 import { LSP } from "@/lsp/lsp"
 import { FSUtil } from "@opencode-ai/core/fs-util"
@@ -205,10 +205,9 @@ export const ApplyPatchTool = Tool.define(
 
       // Check permissions if needed
       const relativePaths = fileChanges.map((c) => path.relative(instance.worktree, c.filePath).replaceAll("\\", "/"))
-      // Keyed by the source path: for a move, the content the student may know lives at filePath, and the
-      // destination is a fresh path they could never have read.
-      const unfamiliar = new Set(yield* familiarity.getUnfamiliar(fileChanges.map((c) => c.filePath)))
-      const unfamiliarFiles = relativePaths.filter((_, i) => unfamiliar.has(fileChanges[i].filePath))
+      // Keyed by the source path (absolute): for a move, the content the student may know lives at filePath, and
+      // the destination is a fresh path they could never have read. Added files are exempt via the existence check.
+      const unfamiliarFiles = yield* familiarity.unfamiliar(fileChanges.map((c) => c.filePath))
       yield* ctx.ask({
         permission: "edit",
         patterns: relativePaths,

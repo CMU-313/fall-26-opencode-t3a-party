@@ -9,7 +9,7 @@ import { InstanceState } from "@/effect/instance-state"
 import { ShareNext } from "@/share/share-next"
 import { Effect, Layer } from "effect"
 import { Config } from "@/config/config"
-import { Familiarity } from "@/tool/familiarity"
+import { Familiarity } from "@/familiarity"
 import { Service } from "./bootstrap-service"
 
 export { Service } from "./bootstrap-service"

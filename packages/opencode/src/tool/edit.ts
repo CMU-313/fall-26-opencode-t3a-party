@@ -16,7 +16,7 @@ import { Format } from "../format"
 import { InstanceState } from "@/effect/instance-state"
 import { Snapshot } from "@/snapshot"
 import { assertExternalDirectoryEffect } from "./external-directory"
-import { Familiarity } from "./familiarity"
+import { Familiarity } from "@/familiarity"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import * as Bom from "@/util/bom"
 
@@ -83,9 +83,7 @@ export const EditTool = Tool.define(
             ? params.filePath
             : path.join(instance.directory, params.filePath)
           yield* assertExternalDirectoryEffect(ctx, filePath)
-          const unfamiliarFiles = (yield* familiarity.isFamiliar(filePath))
-            ? []
-            : [path.relative(instance.worktree, filePath)]
+          const unfamiliarFiles = yield* familiarity.unfamiliar([filePath])
 
           let diff = ""
           let contentOld = ""
