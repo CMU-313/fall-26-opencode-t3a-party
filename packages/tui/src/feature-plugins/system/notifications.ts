@@ -47,6 +47,8 @@ const tui: TuiPlugin = async (api) => {
   })
 
   api.event.on("permission.asked", (event) => {
+    // Auto-allowed unfamiliar-edit notices are informational, not a prompt that needs input.
+    if (event.properties.metadata?.unfamiliarAutoAllowed === true) return
     if (permissions.has(event.properties.id)) return
     permissions.add(event.properties.id)
     notify(api, event.properties.sessionID, "Permission needs input", "permission")
