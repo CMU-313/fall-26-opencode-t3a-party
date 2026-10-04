@@ -1714,9 +1714,34 @@ function TextPart(props: { last: boolean; part: TextPart; message: AssistantMess
 
 // Pending messages moved to individual tool pending functions
 
+function UnfamiliarBanner(props: { files: string[] }) {
+  const { theme } = useTheme()
+  const pathFormatter = usePathFormatter()
+  return (
+    <box
+      border={["left"]}
+      borderColor={theme.warning}
+      customBorderChars={SplitBorder.customBorderChars}
+      paddingLeft={1}
+      flexShrink={0}
+    >
+      <text fg={theme.warning}>
+        {"△ AI edited files you have not read or edited: " + props.files.map((f) => pathFormatter.format(f)).join(", ")}
+      </text>
+    </box>
+  )
+}
+
 function ToolPart(props: { last: boolean; part: ToolPart; message: AssistantMessage }) {
   const ctx = use()
   const display = createMemo(() => toolDisplay(props.part.tool))
+
+  // Surfaced for any edit that touched files the student had not read or edited — including ones allowed silently
+  // after they chose "Always allow AI edits on unfamiliar files". Stays inline under the result, not a toast.
+  const unfamiliarFiles = createMemo(() => {
+    const value = props.part.state.status === "completed" ? props.part.state.metadata?.unfamiliarFiles : undefined
+    return Array.isArray(value) ? value.filter((file): file is string => typeof file === "string") : []
+  })
 
   // Hide tool if showDetails is false and tool completed successfully
   const shouldHide = createMemo(() => {
@@ -1744,6 +1769,7 @@ function ToolPart(props: { last: boolean; part: ToolPart; message: AssistantMess
   }
 
   return (
+    <>
     <Show when={!shouldHide()}>
       <Switch>
         <Match when={display() === "bash"}>
@@ -1793,6 +1819,10 @@ function ToolPart(props: { last: boolean; part: ToolPart; message: AssistantMess
         </Match>
       </Switch>
     </Show>
+    <Show when={unfamiliarFiles().length > 0}>
+      <UnfamiliarBanner files={unfamiliarFiles()} />
+    </Show>
+    </>
   )
 }
 

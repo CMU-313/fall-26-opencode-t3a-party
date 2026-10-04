@@ -212,6 +212,8 @@ export const EditTool = Tool.define(
               diagnostics,
               diff,
               filediff,
+              // Lets the UI show an inline banner when this edit touched files the student had not read or edited.
+              unfamiliarFiles,
             },
             title: `${path.relative(instance.worktree, filePath)}`,
             output,

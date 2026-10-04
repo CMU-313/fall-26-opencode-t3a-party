@@ -31,7 +31,6 @@ import { useArgs } from "./args"
 import { batch, onMount } from "solid-js"
 import path from "path"
 import { useKV } from "./kv"
-import { useToast } from "../ui/toast"
 import { usePermission } from "./permission"
 
 const emptyConsoleState: ConsoleState = {
@@ -147,7 +146,6 @@ export const {
     const event = useEvent()
     const project = useProject()
     const sdk = useSDK()
-    const toast = useToast()
 
     const fullSyncedSessions = new Set<string>()
     const syncingSessions = new Map<string, Promise<void>>()
@@ -197,18 +195,9 @@ export const {
 
         case "permission.asked": {
           const request = event.properties
-          // Not a real prompt: the student opted into allowing unfamiliar edits, so this is a one-line notice that
-          // an unfamiliar file was touched. Show a toast and never add it to the blocking prompt list.
-          if (request.metadata?.unfamiliarAutoAllowed === true) {
-            const files = Array.isArray(request.metadata?.unfamiliarFiles)
-              ? request.metadata.unfamiliarFiles.filter((file): file is string => typeof file === "string")
-              : []
-            toast.show({
-              variant: "warning",
-              message: `AI edited files you have not read or edited: ${files.join(", ")}`,
-            })
-            break
-          }
+          // Informational only: the student opted into allowing unfamiliar edits, so the server already let this
+          // through and the inline tool banner reports it. Never surface it as a blocking prompt.
+          if (request.metadata?.unfamiliarAutoAllowed === true) break
           if (permission.mode === "auto") {
             void sdk.client.permission.reply({
               requestID: request.id,

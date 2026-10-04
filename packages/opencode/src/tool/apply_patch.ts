@@ -309,6 +309,8 @@ export const ApplyPatchTool = Tool.define(
           diff: totalDiff,
           files,
           diagnostics,
+          // Lets the UI show an inline banner when this patch touched files the student had not read or edited.
+          unfamiliarFiles,
         },
         output,
       }

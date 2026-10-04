@@ -100,6 +100,8 @@ export const WriteTool = Tool.define(
               diagnostics,
               filepath,
               exists: exists,
+              // Lets the UI show an inline banner when this write touched files the student had not read or edited.
+              unfamiliarFiles,
             },
             output,
           }
