@@ -1708,6 +1708,30 @@ unixNoLLMServer(
 )
 
 it.instance(
+  "explain command sends the explain template with the user's target to the model",
+  () =>
+    Effect.gen(function* () {
+      const { dir, llm } = yield* useServerConfig(providerCfg)
+      const { prompt, chat } = yield* boot()
+      yield* llm.text("done")
+
+      const result = yield* prompt.command({ sessionID: chat.id, command: "explain", arguments: "src/math.ts add" })
+
+      expect(result.info.role).toBe("assistant")
+      const sent = JSON.stringify((yield* llm.inputs).at(-1)?.messages)
+      expect(sent).toContain("Input: src/math.ts add")
+      expect(sent).toContain(`project at \`${JSON.stringify(dir).slice(1, -1)}\``)
+      expect(sent).toContain("### What this does")
+      expect(sent).toContain("### Where it is used")
+      expect(sent).toContain("### Why it is structured this way")
+      expect(sent).not.toContain("$ARGUMENTS")
+      expect(sent).not.toContain("${path}")
+    }),
+  { git: true },
+  30_000,
+)
+
+it.instance(
   "loop waits while shell runs and starts after shell exits",
   () =>
     Effect.gen(function* () {
