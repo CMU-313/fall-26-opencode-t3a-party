@@ -127,6 +127,7 @@ const layer = Layer.effect(
         editID: item.request.id,
         decision,
       })
+      .pipe(EffectRuntime.catchCause((cause) => EffectRuntime.logError("failed to record edit decision", { cause })))
     })
 
     yield* EffectRuntime.addFinalizer(() =>
@@ -242,11 +243,11 @@ const layer = Layer.effect(
           })
 
           if (input.reply === "reject") {
-            yield* recordEditDecision(existing, "rejected")
             yield* Deferred.fail(
               existing.deferred,
               input.message ? new CorrectedError({ feedback: input.message }) : new DeclinedError(),
             )
+            yield* recordEditDecision(existing, "rejected")
             pending.delete(input.requestID)
             for (const [id, item] of pending) {
               if (item.request.sessionID !== existing.request.sessionID) continue
@@ -268,8 +269,9 @@ const layer = Layer.effect(
               resources: existing.request.save,
             })
           }
-          yield* recordEditDecision(existing, "accepted")
+          
           yield* Deferred.succeed(existing.deferred, undefined)
+          yield* recordEditDecision(existing, "accepted")
           pending.delete(input.requestID)
           if (input.reply !== "always" || !existing.request.save?.length) return
 
