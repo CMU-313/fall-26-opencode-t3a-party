@@ -38,7 +38,9 @@ export function displayReport(summary: EditDecision.Summary) {
   const row = (label: string, value: string) =>
     `│${label}${" ".repeat(Math.max(0, width - label.length - value.length))}${value}│`
   console.log("┌" + "─".repeat(width) + "┐")
-  console.log("│" + "AI EDIT REVIEW".padStart(35).padEnd(width) + "│")
+  const header = "AI EDIT REVIEW"
+  const left = Math.floor((width - header.length) / 2)
+  console.log("│" + " ".repeat(left) + header + " ".repeat(width - left - header.length) + "│")
   console.log("├" + "─".repeat(width) + "┤")
   console.log(row("Sessions", summary.sessions.toLocaleString()))
   console.log(row("Edits Proposed", summary.proposed.toLocaleString()))
