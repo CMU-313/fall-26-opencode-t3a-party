@@ -92,13 +92,28 @@ describe("EditDecision.summary", () => {
     }),
   )
 
-  it.effect("ignores a session that belongs to another project", () =>
+  it.effect("treats a session from another project as not found", () =>
     Effect.gen(function* () {
       yield* seed({ ses_c: { project: other, decisions: ["accepted"] } })
 
       const decisions = yield* EditDecision.Service
-      const summary = yield* decisions.summary({ projectID: project, sessionID: SessionV2.ID.make("ses_c") })
-      expect(summary.proposed).toBe(0)
+      const error = yield* decisions
+        .summary({ projectID: project, sessionID: SessionV2.ID.make("ses_c") })
+        .pipe(Effect.flip)
+      expect(error).toBeInstanceOf(EditDecision.SessionNotFoundError)
+      expect(error.sessionID).toBe(SessionV2.ID.make("ses_c"))
+    }),
+  )
+
+  it.effect("fails with a clear error for a session ID that does not exist", () =>
+    Effect.gen(function* () {
+      yield* seed({ ses_a: { project, decisions: ["accepted"] } })
+
+      const decisions = yield* EditDecision.Service
+      const error = yield* decisions
+        .summary({ projectID: project, sessionID: SessionV2.ID.make("ses_typo") })
+        .pipe(Effect.flip)
+      expect(error).toBeInstanceOf(EditDecision.SessionNotFoundError)
     }),
   )
 

@@ -44,10 +44,15 @@ export const Summary = Schema.Struct({
 }).annotate({ identifier: "EditDecision.Summary" })
 export type Summary = typeof Summary.Type
 
+export class SessionNotFoundError extends Schema.TaggedErrorClass<SessionNotFoundError>()(
+  "EditDecision.SessionNotFoundError",
+  { sessionID: SessionV2.ID },
+) {}
+
 export interface Interface {
   readonly record: (input: RecordInput) => Effect.Effect<void>
   readonly forSession: (sessionID: SessionV2.ID) => Effect.Effect<ReadonlyArray<Info>>
-  readonly summary: (input: SummaryInput) => Effect.Effect<Summary>
+  readonly summary: (input: SummaryInput) => Effect.Effect<Summary, SessionNotFoundError>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/v2/EditDecision") {}
@@ -92,6 +97,17 @@ const layer = Layer.effect(
     })
 
     const summary = Effect.fn("EditDecision.summary")(function* (input: SummaryInput) {
+      // A session with no decisions and a session that does not exist both sum to zero,
+      // so check existence first to give the caller a distinguishable error.
+      if (input.sessionID) {
+        const session = yield* db
+          .select({ id: SessionTable.id })
+          .from(SessionTable)
+          .where(and(eq(SessionTable.id, input.sessionID), eq(SessionTable.project_id, input.projectID)))
+          .get()
+          .pipe(Effect.orDie)
+        if (!session) return yield* new SessionNotFoundError({ sessionID: input.sessionID })
+      }
       const row = yield* db
         .select({
           sessions: countDistinct(EditDecisionTable.session_id),

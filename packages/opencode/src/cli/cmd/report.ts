@@ -1,7 +1,7 @@
 import { Effect } from "effect"
 import { EditDecision } from "@opencode-ai/core/permission/decision"
 import { SessionV2 } from "@opencode-ai/core/session"
-import { effectCmd } from "../effect-cmd"
+import { effectCmd, fail } from "../effect-cmd"
 import { InstanceRef } from "@/effect/instance-ref"
 import { UI } from "../ui"
 
@@ -17,10 +17,16 @@ export const ReportCommand = effectCmd({
     const ctx = yield* InstanceRef
     if (!ctx) return
     const decisions = yield* EditDecision.Service
-    const summary = yield* decisions.summary({
-      projectID: ctx.project.id,
-      sessionID: args.session ? SessionV2.ID.make(args.session) : undefined,
-    })
+    const summary = yield* decisions
+      .summary({
+        projectID: ctx.project.id,
+        sessionID: args.session ? SessionV2.ID.make(args.session) : undefined,
+      })
+      .pipe(
+        Effect.catchTag("EditDecision.SessionNotFoundError", (e) =>
+          fail(`Session not found in this project: ${e.sessionID}`),
+        ),
+      )
     if (summary.proposed === 0) {
       UI.println(
         args.session
