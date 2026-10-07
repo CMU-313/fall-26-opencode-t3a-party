@@ -7,6 +7,7 @@ import os from "os"
 import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { FamiliarityMetadata } from "@/familiarity/metadata"
+import { EditDecision } from "@opencode-ai/core/permission/decision"
 
 export const Event = PermissionV1.Event
 
@@ -47,6 +48,22 @@ const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const events = yield* EventV2Bridge.Service
+    const decisions = yield* EditDecision.Service
+
+    const recordEditDecision = Effect.fn("Permission.recordEditDecision")(function* (
+      info: PermissionV1.Request,
+      decision: EditDecision.Decision,
+    ) {
+      if (info.permission !== "edit") return
+      yield* decisions
+        .record({
+          sessionID: info.sessionID,
+          userID: os.userInfo().username || "user",
+          editID: info.id,
+          decision,
+        })
+        .pipe(Effect.catchCause((cause) => Effect.logError("failed to record edit decision", { cause })))
+    })
     const state = yield* InstanceState.make<State>(
       Effect.fn("Permission.state")(function* (ctx) {
         void ctx
@@ -154,6 +171,7 @@ const layer = Layer.effect(
             ? new PermissionV1.CorrectedError({ feedback: input.message })
             : new PermissionV1.RejectedError(),
         )
+        yield* recordEditDecision(existing.info, "rejected")
 
         for (const [id, item] of pending.entries()) {
           if (item.info.sessionID !== existing.info.sessionID) continue
@@ -169,6 +187,7 @@ const layer = Layer.effect(
       }
 
       yield* Deferred.succeed(existing.deferred, undefined)
+      yield* recordEditDecision(existing.info, "accepted")
       if (input.reply === "once") return
 
       // "Always" on a forced unfamiliar-file prompt also opts into allowing future unfamiliar edits silently.
@@ -257,6 +276,6 @@ export function visibleTools<T>(tools: Record<string, T>, ruleset: PermissionV1.
   return Object.fromEntries(Object.entries(tools).filter(([name]) => !hidden.has(name)))
 }
 
-export const node = LayerNode.make({ service: Service, layer: layer, deps: [EventV2Bridge.node] })
+export const node = LayerNode.make({ service: Service, layer: layer, deps: [EventV2Bridge.node, EditDecision.node] })
 
 export * as Permission from "."
