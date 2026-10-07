@@ -13,6 +13,7 @@ import { FSUtil } from "@opencode-ai/core/fs-util"
 import { InstanceState } from "@/effect/instance-state"
 import { trimDiff } from "./edit"
 import { assertExternalDirectoryEffect } from "./external-directory"
+import { Familiarity } from "@/familiarity"
 import * as Bom from "@/util/bom"
 
 const MAX_PROJECT_DIAGNOSTICS_FILES = 5
@@ -31,6 +32,7 @@ export const WriteTool = Tool.define(
     const fs = yield* FSUtil.Service
     const events = yield* EventV2Bridge.Service
     const format = yield* Format.Service
+    const familiarity = yield* Familiarity.Service
 
     return {
       description: DESCRIPTION,
@@ -51,6 +53,7 @@ export const WriteTool = Tool.define(
           const contentNew = next.text
 
           const diff = trimDiff(createTwoFilesPatch(filepath, filepath, contentOld, contentNew))
+          const unfamiliarFiles = yield* familiarity.unfamiliar([filepath])
           yield* ctx.ask({
             permission: "edit",
             patterns: [path.relative(instance.worktree, filepath)],
@@ -58,8 +61,10 @@ export const WriteTool = Tool.define(
             metadata: {
               filepath,
               diff,
+              unfamiliarFiles,
             },
           })
+          yield* familiarity.markFamiliar(filepath)
 
           yield* fs.writeWithDirs(filepath, Bom.join(contentNew, desiredBom))
           if (yield* format.file(filepath)) {
@@ -95,6 +100,10 @@ export const WriteTool = Tool.define(
               diagnostics,
               filepath,
               exists: exists,
+              // Lets the UI show an inline banner when this write touched files the student had not read or edited.
+              unfamiliarFiles,
+              // Lets the UI note when the AI created a brand-new file the student is reviewing for the first time.
+              createdFiles: exists ? [] : [filepath],
             },
             output,
           }

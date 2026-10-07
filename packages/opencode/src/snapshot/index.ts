@@ -41,6 +41,7 @@ export interface Interface {
   readonly restore: (snapshot: string) => Effect.Effect<void>
   readonly revert: (patches: Patch[]) => Effect.Effect<void>
   readonly diff: (hash: string) => Effect.Effect<string>
+  readonly diffNames: (from: string, to: string) => Effect.Effect<string[]>
   readonly diffFull: (from: string, to: string) => Effect.Effect<FileDiff[]>
 }
 
@@ -543,6 +544,19 @@ const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Service | C
           )
         })
 
+        // Cheapest tree-to-tree diff: just the names of files that changed between two snapshots, worktree-relative.
+        const diffNames = Effect.fnUntraced(function* (from: string, to: string) {
+          return yield* locked(
+            Effect.gen(function* () {
+              const result = yield* git([...quote, ...args(["diff", "--name-only", "-z", from, to, "--", "."])], {
+                cwd: state.directory,
+              })
+              if (result.code !== 0) return [] as string[]
+              return result.text.split("\0").filter(Boolean)
+            }),
+          )
+        })
+
         const diffFull = Effect.fnUntraced(function* (from: string, to: string) {
           return yield* locked(
             Effect.gen(function* () {
@@ -765,7 +779,7 @@ const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Service | C
           Effect.forkScoped,
         )
 
-        return { cleanup, track, patch, restore, revert, diff, diffFull }
+        return { cleanup, track, patch, restore, revert, diff, diffNames, diffFull }
       }),
     )
 
@@ -790,6 +804,9 @@ const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Service | C
       }),
       diff: Effect.fn("Snapshot.diff")(function* (hash: string) {
         return yield* InstanceState.useEffect(state, (s) => s.diff(hash))
+      }),
+      diffNames: Effect.fn("Snapshot.diffNames")(function* (from: string, to: string) {
+        return yield* InstanceState.useEffect(state, (s) => s.diffNames(from, to))
       }),
       diffFull: Effect.fn("Snapshot.diffFull")(function* (from: string, to: string) {
         return yield* InstanceState.useEffect(state, (s) => s.diffFull(from, to))

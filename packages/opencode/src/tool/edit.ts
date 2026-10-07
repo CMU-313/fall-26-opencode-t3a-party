@@ -16,6 +16,7 @@ import { Format } from "../format"
 import { InstanceState } from "@/effect/instance-state"
 import { Snapshot } from "@/snapshot"
 import { assertExternalDirectoryEffect } from "./external-directory"
+import { Familiarity } from "@/familiarity"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import * as Bom from "@/util/bom"
 
@@ -62,6 +63,7 @@ export const EditTool = Tool.define(
     const afs = yield* FSUtil.Service
     const format = yield* Format.Service
     const events = yield* EventV2Bridge.Service
+    const familiarity = yield* Familiarity.Service
 
     return {
       description: DESCRIPTION,
@@ -81,10 +83,14 @@ export const EditTool = Tool.define(
             ? params.filePath
             : path.join(instance.directory, params.filePath)
           yield* assertExternalDirectoryEffect(ctx, filePath)
+          const unfamiliarFiles = yield* familiarity.unfamiliar([filePath])
 
           let diff = ""
           let contentOld = ""
           let contentNew = ""
+          // Set when this call creates a brand-new file, so the UI can note the student is reviewing a whole new
+          // file (separate from the unfamiliar-edit warning, which is about partial edits to files they don't know).
+          let createdFile = false
           yield* lock(filePath).withPermits(1)(
             Effect.gen(function* () {
               if (params.oldString === "") {
@@ -94,6 +100,7 @@ export const EditTool = Tool.define(
                     "oldString cannot be empty when editing an existing file. Provide the exact text to replace, or use write for an intentional full-file replacement.",
                   )
                 }
+                createdFile = true
                 const next = Bom.split(params.newString)
                 const desiredBom = next.bom
                 contentOld = ""
@@ -106,8 +113,10 @@ export const EditTool = Tool.define(
                   metadata: {
                     filepath: filePath,
                     diff,
+                    unfamiliarFiles,
                   },
                 })
+                yield* familiarity.markFamiliar(filePath)
                 yield* afs.writeWithDirs(filePath, Bom.join(contentNew, desiredBom))
                 if (yield* format.file(filePath)) {
                   contentNew = yield* Bom.syncFile(afs, filePath, desiredBom)
@@ -149,8 +158,10 @@ export const EditTool = Tool.define(
                 metadata: {
                   filepath: filePath,
                   diff,
+                  unfamiliarFiles,
                 },
               })
+              yield* familiarity.markFamiliar(filePath)
 
               yield* afs.writeWithDirs(filePath, Bom.join(contentNew, desiredBom))
               if (yield* format.file(filePath)) {
@@ -205,6 +216,10 @@ export const EditTool = Tool.define(
               diagnostics,
               diff,
               filediff,
+              // Lets the UI show an inline banner when this edit touched files the student had not read or edited.
+              unfamiliarFiles,
+              // Lets the UI note when the AI created a brand-new file the student is reviewing for the first time.
+              createdFiles: createdFile ? [filePath] : [],
             },
             title: `${path.relative(instance.worktree, filePath)}`,
             output,

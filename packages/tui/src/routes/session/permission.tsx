@@ -19,12 +19,13 @@ import { usePathFormatter } from "../../context/path-format"
 
 type PermissionStage = "permission" | "always" | "reject"
 
-function EditBody(props: { request: PermissionRequest }) {
+export function EditBody(props: { request: PermissionRequest }) {
   const themeState = useTheme()
   const theme = themeState.theme
   const syntax = themeState.syntax
   const config = useTuiConfig()
   const dimensions = useTerminalDimensions()
+  const pathFormatter = usePathFormatter()
 
   const filepath = createMemo(() => {
     const value = props.request.metadata?.filepath
@@ -34,6 +35,11 @@ function EditBody(props: { request: PermissionRequest }) {
     const value = props.request.metadata?.diff
     return typeof value === "string" ? value : ""
   })
+  const unfamiliarFiles = createMemo(() => {
+    const value = props.request.metadata?.unfamiliarFiles
+    return Array.isArray(value) ? value.filter((file): file is string => typeof file === "string") : []
+  })
+  const unfamiliarForced = createMemo(() => props.request.metadata?.unfamiliarForced === true)
 
   const view = createMemo(() => {
     const diffStyle = config.diff_style
@@ -46,6 +52,22 @@ function EditBody(props: { request: PermissionRequest }) {
 
   return (
     <box flexDirection="column" gap={1}>
+      <Show when={unfamiliarFiles().length > 0}>
+        <box flexDirection="column" paddingLeft={1} flexShrink={0}>
+          <text fg={theme.warning}>△ Unfamiliar files</text>
+          <text fg={theme.text}>This AI-proposed change modifies files you have not previously read or edited:</text>
+          <For each={unfamiliarFiles()}>
+            {(file) => <text fg={theme.text}>{"  • " + pathFormatter.format(file)}</text>}
+          </For>
+          <text fg={theme.textMuted}>Review these changes carefully before accepting.</text>
+          <Show when={unfamiliarForced()}>
+            <text fg={theme.textMuted}>
+              Shown even though these edits are normally allowed, because they touch files you haven't read or
+              edited.
+            </text>
+          </Show>
+        </box>
+      </Show>
       <Show when={diff()}>
         <scrollbox
           height="100%"
@@ -117,6 +139,10 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
   })
   const pathFormatter = usePathFormatter()
 
+  // A forced request is an otherwise-allowed edit stopped only because it touches unfamiliar files; "Always" on it
+  // means "allow AI edits on unfamiliar files" rather than the usual blanket allow.
+  const forced = createMemo(() => props.request.metadata?.unfamiliarForced === true)
+
   const session = createMemo(() => sync.data.session.find((s) => s.id === props.request.sessionID))
 
   const input = createMemo(() => {
@@ -140,6 +166,9 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
           title="Always allow"
           body={
             <Switch>
+              <Match when={forced()}>
+                <TextBody title="This will allow AI edits to files you have not read or edited, without prompting again, until OpenCode is restarted. You will still see a one-line notice when it happens." />
+              </Match>
               <Match when={props.request.always.length === 1 && props.request.always[0] === "*"}>
                 <TextBody title={"This will allow " + props.request.permission + " until OpenCode is restarted."} />
               </Match>
@@ -402,7 +431,11 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
               title="Permission required"
               header={header()}
               body={current.body}
-              options={{ once: "Allow once", always: "Allow always", reject: "Reject" }}
+              options={{
+                once: "Allow once",
+                always: forced() ? "Always allow AI edits on unfamiliar files" : "Allow always",
+                reject: "Reject",
+              }}
               escapeKey="reject"
               fullscreen
               onSelect={(option) => {

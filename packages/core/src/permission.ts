@@ -2,6 +2,7 @@ export * as PermissionV2 from "./permission"
 
 import { makeLocationNode } from "./effect/app-node"
 import { Context, Deferred, Effect as EffectRuntime, Layer, Schema } from "effect"
+import os from "os"
 import { Permission } from "@opencode-ai/schema/permission"
 import { EventV2 } from "./event"
 import { Location } from "./location"
@@ -10,6 +11,7 @@ import { SessionV2 } from "./session"
 import { SessionStore } from "./session/store"
 import { Wildcard } from "./util/wildcard"
 import { PermissionSaved } from "./permission/saved"
+import { EditDecision } from "./permission/decision"
 
 export { Effect, Rule, Ruleset } from "@opencode-ai/schema/permission"
 const missingAgentPermissions: Permission.Ruleset = [{ action: "*", resource: "*", effect: "deny" }]
@@ -114,7 +116,19 @@ const layer = Layer.effect(
     const agents = yield* AgentV2.Service
     const sessions = yield* SessionStore.Service
     const saved = yield* PermissionSaved.Service
+    const decisions = yield* EditDecision.Service
     const pending = new Map<ID, Pending>()
+
+    const recordEditDecision = EffectRuntime.fnUntraced(function* (item: Pending, decision: EditDecision.Decision) {
+      if (item.request.action !== "edit") return
+      yield* decisions.record({
+        sessionID: item.request.sessionID,
+        userID: os.userInfo().username || "user",
+        editID: item.request.id,
+        decision,
+      })
+      .pipe(EffectRuntime.catchCause((cause) => EffectRuntime.logError("failed to record edit decision", { cause })))
+    })
 
     yield* EffectRuntime.addFinalizer(() =>
       EffectRuntime.forEach(pending.values(), (item) => Deferred.fail(item.deferred, new DeclinedError()), {
@@ -233,6 +247,7 @@ const layer = Layer.effect(
               existing.deferred,
               input.message ? new CorrectedError({ feedback: input.message }) : new DeclinedError(),
             )
+            yield* recordEditDecision(existing, "rejected")
             pending.delete(input.requestID)
             for (const [id, item] of pending) {
               if (item.request.sessionID !== existing.request.sessionID) continue
@@ -254,7 +269,9 @@ const layer = Layer.effect(
               resources: existing.request.save,
             })
           }
+          
           yield* Deferred.succeed(existing.deferred, undefined)
+          yield* recordEditDecision(existing, "accepted")
           pending.delete(input.requestID)
           if (input.reply !== "always" || !existing.request.save?.length) return
 
@@ -306,5 +323,5 @@ export const locationLayer = layer.pipe(Layer.provideMerge(AgentV2.locationLayer
 export const node = makeLocationNode({
   service: Service,
   layer,
-  deps: [EventV2.node, Location.node, AgentV2.node, SessionStore.node, PermissionSaved.node],
+  deps: [EventV2.node, Location.node, AgentV2.node, SessionStore.node, PermissionSaved.node, EditDecision.node],
 })
