@@ -7,6 +7,7 @@ import { InstanceState } from "@/effect/instance-state"
 import { Patch } from "../patch"
 import { createTwoFilesPatch, diffLines } from "diff"
 import { assertExternalDirectoryEffect } from "./external-directory"
+import { Familiarity } from "@/familiarity"
 import { trimDiff } from "./edit"
 import { LSP } from "@/lsp/lsp"
 import { FSUtil } from "@opencode-ai/core/fs-util"
@@ -26,6 +27,7 @@ export const ApplyPatchTool = Tool.define(
     const afs = yield* FSUtil.Service
     const format = yield* Format.Service
     const events = yield* EventV2Bridge.Service
+    const familiarity = yield* Familiarity.Service
 
     const run = Effect.fn("ApplyPatchTool.execute")(function* (
       params: Schema.Schema.Type<typeof Parameters>,
@@ -203,6 +205,9 @@ export const ApplyPatchTool = Tool.define(
 
       // Check permissions if needed
       const relativePaths = fileChanges.map((c) => path.relative(instance.worktree, c.filePath).replaceAll("\\", "/"))
+      // Keyed by the source path (absolute): for a move, the content the student may know lives at filePath, and
+      // the destination is a fresh path they could never have read. Added files are exempt via the existence check.
+      const unfamiliarFiles = yield* familiarity.unfamiliar(fileChanges.map((c) => c.filePath))
       yield* ctx.ask({
         permission: "edit",
         patterns: relativePaths,
@@ -211,8 +216,14 @@ export const ApplyPatchTool = Tool.define(
           filepath: relativePaths.join(", "),
           diff: totalDiff,
           files,
+          unfamiliarFiles,
         },
       })
+      yield* Effect.forEach(
+        fileChanges.filter((c) => c.type !== "delete"),
+        (c) => familiarity.markFamiliar(c.movePath ?? c.filePath),
+        { discard: true },
+      )
 
       // Apply the changes
       const updates: Array<{ file: string; event: "add" | "change" | "unlink" }> = []
@@ -298,6 +309,10 @@ export const ApplyPatchTool = Tool.define(
           diff: totalDiff,
           files,
           diagnostics,
+          // Lets the UI show an inline banner when this patch touched files the student had not read or edited.
+          unfamiliarFiles,
+          // Lets the UI note brand-new files the AI created that the student is reviewing for the first time.
+          createdFiles: fileChanges.filter((c) => c.type === "add").map((c) => c.filePath),
         },
         output,
       }

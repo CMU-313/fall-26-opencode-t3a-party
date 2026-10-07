@@ -14,6 +14,7 @@ import { Agent } from "../../src/agent/agent"
 import { SessionID, MessageID } from "../../src/session/schema"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { disposeAllInstances, TestInstance } from "../fixture/fixture"
+import { Familiarity } from "@/familiarity"
 import { testEffect } from "../lib/effect"
 
 const ctx = {
@@ -41,6 +42,7 @@ const it = testEffect(
       CrossSpawnSpawner.node,
       Truncate.node,
       Agent.node,
+      Familiarity.node,
     ]),
   ),
 )
@@ -276,4 +278,86 @@ describe("tool.write", () => {
       }),
     )
   })
+})
+
+describe("tool.write familiarity", () => {
+  type AskInput = Parameters<Tool.Context["ask"]>[0]
+
+  const recordAsks = () => {
+    const asks: AskInput[] = []
+    const recording = {
+      ...ctx,
+      ask: (input: AskInput) =>
+        Effect.sync(() => {
+          asks.push(input)
+        }),
+    }
+    return { asks, recording }
+  }
+
+  const put = (file: string, content: string) => Effect.promise(() => fs.writeFile(file, content))
+  const unfamiliar = (files: string[]) => Familiarity.Service.use((familiarity) => familiarity.unfamiliar(files))
+
+  it.instance(
+    "writing a new file is never unfamiliar",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const { asks, recording } = recordAsks()
+
+        yield* run({ filePath: path.join(test.directory, "new.ts"), content: "export {}\n" }, recording)
+        expect(asks[0].metadata.unfamiliarFiles).toEqual([])
+      }),
+    { git: true },
+  )
+
+  it.instance(
+    "overwriting an unfamiliar file names it",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const file = path.join(test.directory, "existing.ts")
+        yield* put(file, "old\n")
+        const { asks, recording } = recordAsks()
+
+        yield* run({ filePath: file, content: "new\n" }, recording)
+        expect(asks[0].metadata.unfamiliarFiles).toEqual([file])
+      }),
+    { git: true },
+  )
+
+  it.instance(
+    "overwriting a familiar file carries no unfamiliar files",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const file = path.join(test.directory, "existing.ts")
+        yield* put(file, "old\n")
+        yield* Familiarity.Service.use((familiarity) => familiarity.markFamiliar(file))
+        const { asks, recording } = recordAsks()
+
+        yield* run({ filePath: file, content: "new\n" }, recording)
+        expect(asks[0].metadata.unfamiliarFiles).toEqual([])
+      }),
+    { git: true },
+  )
+
+  it.instance(
+    "an accepted write makes the file familiar; a rejected one does not",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const accepted = path.join(test.directory, "accepted.ts")
+        const rejected = path.join(test.directory, "rejected.ts")
+        // Pre-create the rejected target so unfamiliar() can report it (new files are always exempt).
+        yield* put(rejected, "orig\n")
+        const rejecting = { ...ctx, ask: () => Effect.die(new Error("rejected")) }
+
+        yield* run({ filePath: accepted, content: "a\n" })
+        yield* run({ filePath: rejected, content: "b\n" }, rejecting).pipe(Effect.exit)
+        expect(yield* unfamiliar([accepted])).toEqual([])
+        expect(yield* unfamiliar([rejected])).toEqual([rejected])
+      }),
+    { git: true },
+  )
 })

@@ -195,6 +195,9 @@ export const {
 
         case "permission.asked": {
           const request = event.properties
+          // Informational only: the student opted into allowing unfamiliar edits, so the server already let this
+          // through and the inline tool banner reports it. Never surface it as a blocking prompt.
+          if (request.metadata?.unfamiliarAutoAllowed === true) break
           if (permission.mode === "auto") {
             void sdk.client.permission.reply({
               requestID: request.id,

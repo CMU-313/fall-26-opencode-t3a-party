@@ -797,7 +797,34 @@ export const RunCommand = effectCmd({
               const permission = event.properties
               if (permission.sessionID !== sessionID) continue
 
+              const meta = permission.metadata as Record<string, unknown> | undefined
+              const unfamiliar = Array.isArray(meta?.unfamiliarFiles)
+                ? meta.unfamiliarFiles.filter((file): file is string => typeof file === "string")
+                : []
+
+              // The student opted into allowing unfamiliar edits: the server already let this one through, so
+              // there is nothing to reply to — just surface the one-line notice that it happened.
+              if (meta?.unfamiliarAutoAllowed === true) {
+                UI.println(
+                  UI.Style.TEXT_WARNING_BOLD + "!",
+                  UI.Style.TEXT_NORMAL + `AI edited files you have not read or edited: ${unfamiliar.join(", ")}`,
+                )
+                continue
+              }
+
               if (auto) {
+                await client.permission.reply({
+                  requestID: permission.id,
+                  reply: "once",
+                })
+              } else if (meta?.unfamiliarForced === true) {
+                // A forced prompt is an otherwise-allowed edit stopped only because it touches unfamiliar files.
+                // Auto-rejecting it would block every edit to an existing file, so warn and allow it once instead.
+                UI.println(
+                  UI.Style.TEXT_WARNING_BOLD + "!",
+                  UI.Style.TEXT_NORMAL +
+                    `edit touches files you have not read or edited: ${unfamiliar.join(", ")}; allowing once`,
+                )
                 await client.permission.reply({
                   requestID: permission.id,
                   reply: "once",
