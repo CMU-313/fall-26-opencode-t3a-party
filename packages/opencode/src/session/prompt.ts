@@ -25,6 +25,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import * as Stream from "effect/Stream"
 import { Command } from "../command"
+import { GitProvenance } from "@/git/provenance"
 import { pathToFileURL, fileURLToPath } from "url"
 import { Config } from "@/config/config"
 import { ConfigMarkdown } from "@/config/markdown"
@@ -126,6 +127,7 @@ const layer = Layer.effect(
     const permission = yield* Permission.Service
     const familiarity = yield* Familiarity.Service
     const fsys = yield* FSUtil.Service
+    const provenance = yield* GitProvenance.Service
     const mcp = yield* MCP.Service
     const lsp = yield* LSP.Service
     const registry = yield* ToolRegistry.Service
@@ -1433,7 +1435,12 @@ const layer = Layer.effect(
         throw error
       }
 
-      const templateParts = yield* resolvePromptParts(template)
+      // Appended after shell and @file expansion so commit subjects are never interpreted as template syntax.
+      const history = input.command === Command.Default.EXPLAIN ? yield* provenance.context(args) : undefined
+      const templateParts = [
+        ...(yield* resolvePromptParts(template)),
+        ...(history ? [{ type: "text" as const, text: history }] : []),
+      ]
       const inputFiles = new Set(
         input.parts?.filter((part) => new URL(part.url).protocol === "file:").map((part) => fileURLToPath(part.url)),
       )
@@ -1611,6 +1618,7 @@ export const node = LayerNode.make({
     SessionCompaction.node,
     Plugin.node,
     Command.node,
+    GitProvenance.node,
     Config.node,
     Permission.node,
     Familiarity.node,
