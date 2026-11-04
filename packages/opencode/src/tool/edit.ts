@@ -669,15 +669,19 @@ export function trimDiff(diff: string): string {
 
   if (contentLines.length === 0) return diff
 
-  let min = Infinity
+  // The indent to remove is the leading whitespace every non-blank line shares character for character, not the
+  // shortest indent by length: with tabs on one line and spaces on another, removing N characters from each would
+  // strip different whitespace from each line and misstate their relative indentation.
+  let common: string | undefined
   for (const line of contentLines) {
     const content = line.slice(1)
-    if (content.trim().length > 0) {
-      const match = content.match(/^(\s*)/)
-      if (match) min = Math.min(min, match[1].length)
-    }
+    if (content.trim().length === 0) continue
+    const indent = content.match(/^\s*/)![0]
+    common = common === undefined ? indent : sharedPrefix(common, indent)
+    if (common === "") return diff
   }
-  if (min === Infinity || min === 0) return diff
+  if (!common) return diff
+  const strip = common
   const trimmedLines = lines.map((line) => {
     if (
       (line.startsWith("+") || line.startsWith("-") || line.startsWith(" ")) &&
@@ -686,12 +690,19 @@ export function trimDiff(diff: string): string {
     ) {
       const prefix = line[0]
       const content = line.slice(1)
-      return prefix + content.slice(min)
+      // Blank or whitespace-only lines may be shorter than the indent; remove only the part they share with it.
+      return prefix + content.slice(sharedPrefix(content, strip).length)
     }
     return line
   })
 
   return trimmedLines.join("\n")
+}
+
+function sharedPrefix(a: string, b: string) {
+  let i = 0
+  while (i < a.length && i < b.length && a[i] === b[i]) i++
+  return a.slice(0, i)
 }
 
 export function replace(content: string, oldString: string, newString: string, replaceAll = false): string {

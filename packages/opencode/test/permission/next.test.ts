@@ -1266,3 +1266,21 @@ it.instance(
     }),
   { git: true },
 )
+
+it.instance(
+  "reply - always on a forced unfamiliar-file prompt does not override a deny rule",
+  () =>
+    Effect.gen(function* () {
+      // Found by the R6 property in test/familiarity/familiarity.property.test.ts: the opt-in used to add an
+      // `edit: *` approval, which is checked after config rules and so silently overrode deny rules.
+      const forced = yield* ask(editRequest(["src/parser.ts"], allowEdits)).pipe(Effect.forkScoped)
+      const [pending] = yield* waitForPending(1)
+      expect(pending.metadata?.unfamiliarForced).toBe(true)
+      yield* reply({ requestID: pending.id, reply: "always" })
+      yield* Fiber.join(forced)
+
+      const err = yield* fail(ask(editRequest([], [{ permission: "edit", pattern: "src/*", action: "deny" }])))
+      expect(err).toBeInstanceOf(PermissionV1.DeniedError)
+    }),
+  { git: true },
+)
