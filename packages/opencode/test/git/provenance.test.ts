@@ -127,7 +127,7 @@ describe("GitProvenance.get", () => {
  )
 
 
- it.live("returns an empty result for an untracked file", () =>
+ it.live("fails with untracked for a file that has never been committed", () =>
    provideTmpdirInstance(
      (dir) =>
        Effect.gen(function* () {
@@ -135,14 +135,16 @@ describe("GitProvenance.get", () => {
          yield* Effect.promise(() => Bun.write(path.join(dir, "new.ts"), lines("a", "b")))
 
 
-         expect(yield* provenance.get("new.ts", 1, 2)).toEqual({ commits: [], truncated: false })
+         expect((yield* failure(provenance.get("new.ts", 1, 2)))?.reason).toBe("untracked")
+         yield* Effect.promise(() => $`git add new.ts`.cwd(dir).quiet())
+         expect((yield* failure(provenance.get("new.ts", 1, 2)))?.reason).toBe("untracked")
        }),
      { git: true },
    ),
  )
 
 
- it.live("returns an empty result for lines that only exist as uncommitted additions", () =>
+ it.live("rejects lines that only exist as uncommitted additions", () =>
    provideTmpdirInstance(
      (dir) =>
        Effect.gen(function* () {
@@ -151,7 +153,7 @@ describe("GitProvenance.get", () => {
          yield* Effect.promise(() => Bun.write(path.join(dir, "a.ts"), lines("1", "2", "3", "4")))
 
 
-         expect(yield* provenance.get("a.ts", 3, 4)).toEqual({ commits: [], truncated: false })
+         expect((yield* failure(provenance.get("a.ts", 3, 4)))?.reason).toBe("invalid-range")
        }),
      { git: true },
    ),
@@ -241,7 +243,6 @@ describe("GitProvenance.get", () => {
          for (const [start, end] of [
            [3, 2],
            [0, 1],
-           [2, 4],
            [1.5, 2],
          ]) {
            expect((yield* failure(provenance.get("a.ts", start, end)))?.reason).toBe("invalid-range")
@@ -249,6 +250,8 @@ describe("GitProvenance.get", () => {
          expect((yield* failure(provenance.get("missing.ts", 1, 1)))?.reason).toBe("not-a-file")
          expect((yield* failure(provenance.get("a.ts", 1, 1, { maxCommits: 0 })))?.reason).toBe("invalid-options")
          expect(calls).toEqual([])
+         // Past-the-end is checked against the last committed version, which needs git.
+         expect((yield* failure(provenance.get("a.ts", 2, 4)))?.reason).toBe("invalid-range")
          expect((yield* provenance.get("a.ts", 1, 3)).commits).toHaveLength(1)
          expect(calls.length).toBeGreaterThan(0)
        }),
@@ -342,7 +345,7 @@ describe("GitProvenance.context", () => {
 
 
          expect(yield* provenance.context(["a.ts:1"])).toContain("uncommitted changes")
-         expect(yield* provenance.context(["a.ts:3"])).toContain("No commits found for this range.")
+         expect(yield* provenance.context(["a.ts:3"])).toContain("as last committed")
          const error = yield* provenance.context(["a.ts:9-10"])
          expect(error).toStartWith(GitProvenance.HEADER)
          expect(error).toContain("Git history is unavailable")

@@ -20,7 +20,9 @@ const fakeGit = Layer.succeed(
         text: () => "",
         stderr: Buffer.from(""),
         truncated: false,
-        // Only `git log` uses the configured result; the dirty check in context() sees a clean file.
+        // Only `git log` uses the configured result; the committed-length check sees the file as written
+        // below, and the dirty check in context() sees a clean file.
+        ...(args[0] === "cat-file" ? { text: () => "1\n2\n" } : {}),
         ...(args[0] === "log" ? next : {}),
       }),
   } as unknown as Git.Interface),
@@ -50,20 +52,20 @@ const failure = <A, E>(effect: Effect.Effect<A, E>) =>
     Effect.orElseSucceed(() => undefined),
   )
 
-const record = (hash: string, subject: string) => `${hash}\x1f2026-09-28T12:00:00-04:00\x1f${subject}\x1e`
+const record = (hash: string, subject: string) => `${hash}\x002026-09-28T12:00:00-04:00\x00${subject}\x00`
 
 describe("GitProvenance git output handling", () => {
   it.live("parses records, trims surrounding whitespace, and keeps separators inside a subject", () =>
     withFile((provenance) =>
       Effect.gen(function* () {
-        next = { text: () => `${record("aaa", "first (#4)")}\n${record("bbb", "odd\x1fsubject")}\n` }
+        next = { text: () => `${record("aaa", "first (#4)")}\n${record("bbb", "odd\x1f\x1esubject")}\n` }
 
         const result = yield* provenance.get("a.ts", 1, 2)
         expect(result).toEqual({
           truncated: false,
           commits: [
             { hash: "aaa", date: "2026-09-28T12:00:00-04:00", subject: "first (#4)", issueRefs: [4] },
-            { hash: "bbb", date: "2026-09-28T12:00:00-04:00", subject: "odd\x1fsubject", issueRefs: [] },
+            { hash: "bbb", date: "2026-09-28T12:00:00-04:00", subject: "odd\x1f\x1esubject", issueRefs: [] },
           ],
         })
       }),
@@ -117,16 +119,16 @@ describe("GitProvenance git output handling", () => {
     ),
   )
 
-  it.live("treats git's no-history messages as an empty history, not an error", () =>
+  it.live("maps git's no-history messages to errors instead of an empty history", () =>
     withFile((provenance) =>
       Effect.gen(function* () {
-        for (const stderr of [
-          "fatal: file a.ts has only 1 line",
-          "fatal: file a.ts has only 0 lines",
-          "fatal: There is no path a.ts in the commit",
-        ]) {
+        for (const [stderr, reason] of [
+          ["fatal: file a.ts has only 1 line", "invalid-range"],
+          ["fatal: file a.ts has only 0 lines", "invalid-range"],
+          ["fatal: There is no path a.ts in the commit", "untracked"],
+        ] as const) {
           next = { exitCode: 128, stderr: Buffer.from(stderr) }
-          expect(yield* provenance.get("a.ts", 1, 2)).toEqual({ commits: [], truncated: false })
+          expect((yield* failure(provenance.get("a.ts", 1, 2)))?.reason).toBe(reason)
         }
       }),
     ),
