@@ -19,6 +19,11 @@ const it = testEffect(AppNodeBuilder.build(LayerNode.group([Database.node, EditD
 
 // each property does a few hundred db writes, so give it more than the 5s default
 const TIMEOUT = 60_000
+const NUM_RUNS = 100
+
+// CI runs `bun test --only-failures`, which hides passing test names, so print one line per property
+// to show in the CI log that it ran.
+const ran = (name: string) => console.log(`${name}: passed ${NUM_RUNS} random runs`)
 
 type Decision = EditDecision.Decision
 
@@ -122,8 +127,10 @@ describe("report properties", () => {
               expect(s.acceptRatio).toBeLessThanOrEqual(1)
               expect(s.acceptRatio).toBe(s.proposed === 0 ? 0 : s.accepted / s.proposed)
             }),
+            { numRuns: NUM_RUNS },
           ),
         )
+        ran("R1")
       }),
     TIMEOUT,
   )
@@ -148,8 +155,10 @@ describe("report properties", () => {
               const after = await run(service.summary({ projectID: project }))
               expect(after).toEqual(before)
             }),
+            { numRuns: NUM_RUNS },
           ),
         )
+        ran("R2")
       }),
     TIMEOUT,
   )
@@ -180,8 +189,10 @@ describe("report properties", () => {
               expect(total.accepted).toBe(sum("accepted"))
               expect(total.rejected).toBe(sum("rejected"))
             }),
+            { numRuns: NUM_RUNS },
           ),
         )
+        ran("R3")
       }),
     TIMEOUT,
   )
@@ -212,8 +223,10 @@ describe("report properties", () => {
               const after = await run(service.summary({ projectID: project }))
               expect(after).toEqual(before)
             }),
+            { numRuns: NUM_RUNS },
           ),
         )
+        ran("R4")
       }),
     TIMEOUT,
   )
@@ -247,8 +260,10 @@ describe("report properties", () => {
               expect(error).toBeInstanceOf(EditDecision.SessionNotFoundError)
               expect(error.sessionID).toBe(sessionID)
             }),
+            { numRuns: NUM_RUNS },
           ),
         )
+        ran("R5")
       }),
     TIMEOUT,
   )
