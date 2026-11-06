@@ -39,11 +39,16 @@ const runner = Effect.gen(function* () {
 })
 type Runner = Effect.Success<typeof runner>
 
+// One single-line edit. All three ops are included because inserts and deletes shift later lines, which is
+// what makes `git log -L` tracking non-trivial. `at` is any natural and is wrapped into range by `apply`,
+// so it shrinks toward the first line.
 const edit = fc.record({
   op: fc.constantFrom("replace", "insert", "delete"),
   at: fc.nat(),
 })
 
+// A file's initial content followed by a list of edits, one commit per edit. Sizes are capped so each run
+// stays fast with real commits, but still produce histories longer than the default limit of 10.
 const history = fc.record({
   initial: fc.integer({ min: 1, max: 20 }),
   edits: fc.array(edit, { maxLength: 12 }),
@@ -82,6 +87,8 @@ const pick = (length: number, a: number, b: number) => {
 const ids = (result: GitProvenance.Provenance) => result.commits.map((item) => item.hash)
 
 describe("GitProvenance properties", () => {
+  // R1 (invariant): for any generated commit history and any valid or invalid range, the HEAD id, current
+  // branch, and `git status --porcelain` output are unchanged after `get` and `context`.
   it.live(
     "R1: provenance never modifies the repo",
     () =>
@@ -100,8 +107,10 @@ describe("GitProvenance properties", () => {
               fc.assert(
                 fc.asyncProperty(
                   history,
+                  // Raw start and end, not `pick`, so negative, reversed, and past-the-end ranges are covered too.
                   fc.integer({ min: -3, max: 30 }),
                   fc.integer({ min: -3, max: 30 }),
+                  // Toggles an uncommitted change so the snapshot covers both clean and dirty working trees.
                   fc.boolean(),
                   async (input, start, end, dirty) => {
                     const file = fresh("r1")
@@ -125,6 +134,8 @@ describe("GitProvenance properties", () => {
     TIMEOUT,
   )
 
+  // R2 (invariant): for any input from {untracked file, nonexistent path, non-repo folder}, `get` fails with a
+  // typed error rather than an empty history, the three messages differ, and none is the "no commits" output.
   it.live(
     "R2: bad inputs give distinct errors",
     () =>
@@ -139,6 +150,8 @@ describe("GitProvenance properties", () => {
             yield* Effect.promise(() =>
               fc.assert(
                 fc.asyncProperty(
+                  // File length plus a range that always fits it, so an invalid-range error can never hide the
+                  // error each bad input should produce.
                   fc.integer({ min: 1, max: 20 }),
                   fc.nat(),
                   fc.nat(),
@@ -177,6 +190,8 @@ describe("GitProvenance properties", () => {
     TIMEOUT,
   )
 
+  // R3 (metamorphic): replacing one commit's subject with a hostile string leaves the returned commit list
+  // unchanged, the returned subject equals git's stored subject, and no injected command runs.
   it.live(
     "R3: hostile subjects are data, not commands",
     () =>
@@ -186,6 +201,9 @@ describe("GitProvenance properties", () => {
             const provenance = yield* GitProvenance.Service
             const run = yield* runner
             const marker = path.join(dir, "pwned")
+            // Hand-picked attacks that random strings would almost never produce: shell substitution, @file
+            // and prompt injection, git format codes, provenance's own field separators, issue-ref look-alikes,
+            // and a blank line that git treats as the subject/body split.
             const payload = fc.constantFrom(
               `$(touch ${marker})`,
               `\`touch ${marker}\``,
@@ -198,6 +216,8 @@ describe("GitProvenance properties", () => {
               "#1 #fff",
               "\n\nbody line",
             )
+            // 1-4 parts joined together, weighted toward the payloads, with random strings mixed in to find attacks
+            // not on the list. NUL is removed because git cannot store it in a commit message.
             const hostile = fc
               .tuple(fc.array(fc.oneof({ arbitrary: payload, weight: 3 }, { arbitrary: fc.string(), weight: 1 }), {
                 minLength: 1,
@@ -209,8 +229,10 @@ describe("GitProvenance properties", () => {
               fc.assert(
                 fc.asyncProperty(
                   history,
+                  // Range endpoints, mapped onto the final file by `pick`.
                   fc.nat(),
                   fc.nat(),
+                  // Which commit gets the hostile subject, wrapped into the history so any commit can be chosen.
                   fc.nat(),
                   hostile,
                   async (input, a, b, target, subject) => {
@@ -259,6 +281,8 @@ describe("GitProvenance properties", () => {
     TIMEOUT,
   )
 
+  // R4 (invariant): for any n matching commits and any limit, `commits.length === min(n, limit)` and
+  // `truncated === (n > limit)`, and the /explain truncation notice appears exactly when n exceeds 10.
   it.live(
     "R4: truncation flag iff n > limit",
     () =>
@@ -271,11 +295,15 @@ describe("GitProvenance properties", () => {
             yield* Effect.promise(() =>
               fc.assert(
                 fc.asyncProperty(
+                  // File length and range. A dedicated generator instead of `history`, so the true count n is
+                  // known without asking git.
                   fc.integer({ min: 1, max: 12 }),
                   fc.nat(),
                   fc.nat(),
-                  // true edits a line inside the range, false edits one outside it (when one exists).
+                  // true edits a line inside the range, false edits one outside it (when one exists). Up to 16
+                  // edits means n reaches 17, covering both sides of the 10/11 boundary from the interviews.
                   fc.array(fc.record({ inside: fc.boolean(), at: fc.nat() }), { maxLength: 16 }),
+                  // Limits from 1 to 15, so n is sometimes below, equal to, and above the limit.
                   fc.integer({ min: 1, max: 15 }),
                   async (length, a, b, changes, limit) => {
                     const file = fresh("r4")
@@ -319,6 +347,8 @@ describe("GitProvenance properties", () => {
     TIMEOUT,
   )
 
+  // R5 (oracle): the returned commit ids equal the first `limit` ids from a direct `git log -L` call on the same
+  // repo and range, so the newest commits are kept and listed in git's order.
   it.live(
     "R5: matches git log -L, newest first",
     () =>
@@ -331,9 +361,12 @@ describe("GitProvenance properties", () => {
             yield* Effect.promise(() =>
               fc.assert(
                 fc.asyncProperty(
+                  // The general history, because inserts and deletes move lines, which is where git's tracking
+                  // and a reimplementation would most likely disagree.
                   history,
                   fc.nat(),
                   fc.nat(),
+                  // Limits around the history size, so some runs truncate and others return everything.
                   fc.integer({ min: 1, max: 15 }),
                   async (input, a, b, limit) => {
                     const file = fresh("r5")
@@ -362,6 +395,8 @@ describe("GitProvenance properties", () => {
     TIMEOUT,
   )
 
+  // R6 (metamorphic): applying a random uncommitted edit to the working tree does not change the returned
+  // commit id list, because line numbers refer to the last committed version.
   it.live(
     "R6: uncommitted edits don't change history",
     () =>
@@ -377,6 +412,8 @@ describe("GitProvenance properties", () => {
                   history,
                   fc.nat(),
                   fc.nat(),
+                  // 1-4 uncommitted edits reusing `edit`, so the working tree can grow, shrink, or change inside
+                  // the range. At least one, so the working tree is never just the committed file.
                   fc.array(edit, { minLength: 1, maxLength: 4 }),
                   async (input, a, b, uncommitted) => {
                     const file = fresh("r6")
