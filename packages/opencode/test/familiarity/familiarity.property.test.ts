@@ -178,6 +178,7 @@ it.instance("R1: an allowed edit touching unfamiliar files always waits on a pro
         { numRuns: 60 },
       ),
     )
+    console.log("R1: passed 60 random runs")
   }),
 )
 
@@ -226,6 +227,7 @@ it.instance("R3: after opting in, allowed unfamiliar edits go through with a not
         { numRuns: 60 },
       ),
     )
+    console.log("R3: passed 60 random runs")
   }),
 )
 
@@ -249,8 +251,10 @@ it.instance("R6: a denied edit stays denied with no prompt or notice, before and
       ),
     )
     yield* Effect.promise(() => fc.assert(property, { numRuns: 60 }))
+    console.log("R6: passed 60 random runs before opting into always-allow")
     yield* optIn
     yield* Effect.promise(() => fc.assert(property, { numRuns: 60 }))
+    console.log("R6: passed 60 random runs after opting into always-allow")
   }),
 )
 
@@ -365,6 +369,7 @@ it.instance("R2 + R5: the files an edit flags as unfamiliar match a set that onl
         { numRuns: 40 },
       ),
     )
+    console.log("R2 + R5: passed 40 random runs")
   }),
 )
 
@@ -439,5 +444,6 @@ it.instance("R7: the diff shown for an unfamiliar edit is the real diff, minus a
         { numRuns: 150 },
       ),
     )
+    console.log("R7: passed 150 random runs")
   }),
 )
