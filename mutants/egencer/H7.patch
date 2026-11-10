@@ -1,0 +1,38 @@
+diff --git b/packages/opencode/src/tool/edit.ts a/packages/opencode/src/tool/edit.ts
+index 6287108..6b3d124 100644
+--- b/packages/opencode/src/tool/edit.ts
++++ a/packages/opencode/src/tool/edit.ts
+@@ -660,12 +660,12 @@ export const ContextAwareReplacer: Replacer = function* (content, find) {
+ 
+ export function trimDiff(diff: string): string {
+   const lines = diff.split("\n")
+-  // Content lines are the ones after the first "@@" hunk header. Recognizing the "---"/"+++" file headers by their
+-  // text instead would also catch content: a removed "-- comment" line reads "--- comment", an added "++i" "+++i".
+-  const firstHunk = lines.findIndex((line) => line.startsWith("@@"))
+-  const isContent = (line: string, i: number) =>
+-    firstHunk >= 0 && i > firstHunk && (line.startsWith("+") || line.startsWith("-") || line.startsWith(" "))
+-  const contentLines = lines.filter(isContent)
++  const contentLines = lines.filter(
++    (line) =>
++      (line.startsWith("+") || line.startsWith("-") || line.startsWith(" ")) &&
++      !line.startsWith("---") &&
++      !line.startsWith("+++"),
++  )
+ 
+   if (contentLines.length === 0) return diff
+ 
+@@ -682,8 +682,12 @@ export function trimDiff(diff: string): string {
+   }
+   if (!common) return diff
+   const strip = common
+-  const trimmedLines = lines.map((line, i) => {
+-    if (isContent(line, i)) {
++  const trimmedLines = lines.map((line) => {
++    if (
++      (line.startsWith("+") || line.startsWith("-") || line.startsWith(" ")) &&
++      !line.startsWith("---") &&
++      !line.startsWith("+++")
++    ) {
+       const prefix = line[0]
+       const content = line.slice(1)
+       // Blank or whitespace-only lines may be shorter than the indent; remove only the part they share with it.

@@ -1,0 +1,13 @@
+diff --git a/packages/opencode/src/permission/index.ts b/packages/opencode/src/permission/index.ts
+index db19a63..f4e50d1 100644
+--- a/packages/opencode/src/permission/index.ts
++++ b/packages/opencode/src/permission/index.ts
+@@ -100,7 +100,7 @@ const layer = Layer.effect(
+             ruleset: ruleset.filter((rule) => Wildcard.match(request.permission, rule.permission)),
+           })
+         }
+-        if (rule.action === "allow") continue
++        if (rule.action === "allow") break
+         needsAsk = true
+       }
+ 
