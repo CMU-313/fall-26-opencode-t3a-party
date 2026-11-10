@@ -1,0 +1,62 @@
+import { expect, test } from "bun:test"
+import fc from "fast-check"
+import { createTwoFilesPatch } from "diff"
+import { trimDiff } from "../../src/tool/edit"
+
+fc.configureGlobal({ seed: 42 })
+
+const indentArb = fc.constantFrom(" ", "  ", "    ", "\t", "\t ")
+const relativeLineArb = fc.oneof(
+  fc.constant(""),
+  fc.constantFrom(" ", "  ", "    ", "\t"),
+  fc.stringMatching(/[a-z]{1,8}/).map((text) => `  ${text}`),
+  fc.stringMatching(/[a-z]{1,8}/).map((text) => `\t${text}`),
+)
+
+const inputArb = indentArb.chain((indent) =>
+  fc
+    .array(fc.record({ before: relativeLineArb, after: relativeLineArb }), { minLength: 1, maxLength: 8 })
+    .filter(
+      (lines) =>
+        lines.some((line) => line.before.trim() !== "" || line.after.trim() !== "") &&
+        lines.some((line) => line.before !== line.after),
+    )
+    .map((lines) => ({
+      indent,
+      before: lines.map((line) => `${indent}${line.before}`).join("\n"),
+      after: lines.map((line) => `${indent}${line.after}`).join("\n"),
+    })),
+)
+
+const isDiffContentLine = (line: string) =>
+  (line.startsWith("+") || line.startsWith("-") || line.startsWith(" ")) &&
+  !line.startsWith("---") &&
+  !line.startsWith("+++")
+
+const sharedPrefix = (a: string, b: string) => {
+  let i = 0
+  while (i < a.length && i < b.length && a[i] === b[i]) i++
+  return a.slice(0, i)
+}
+
+test("R7: an unfamiliar edit diff preserves changed lines and removes only shared indentation", () => {
+  fc.assert(
+    fc.property(inputArb, ({ before, after }) => {
+      const raw = createTwoFilesPatch("file", "file", before, after)
+      const indents = [...before.split("\n"), ...after.split("\n")]
+        .filter((line) => line.trim() !== "")
+        .map((line) => line.match(/^\s*/)![0])
+      const commonIndent = indents.slice(1).reduce((common, line) => sharedPrefix(common, line), indents[0])
+      const expected = raw
+        .split("\n")
+        .map((line) => {
+          if (!isDiffContentLine(line)) return line
+          const content = line.slice(1)
+          return line[0] + content.slice(sharedPrefix(content, commonIndent).length)
+        })
+        .join("\n")
+
+      expect(trimDiff(raw)).toBe(expected)
+    }),
+  )
+})
