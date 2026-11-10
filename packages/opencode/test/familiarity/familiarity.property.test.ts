@@ -20,9 +20,14 @@ import { Format } from "../../src/format"
 import { Agent } from "../../src/agent/agent"
 import { Truncate } from "@/tool/truncate"
 import { EditTool } from "../../src/tool/edit"
+import { ApplyPatchTool } from "../../src/tool/apply_patch"
 import * as Tool from "../../src/tool/tool"
-import { disposeAllInstances, TestInstance } from "../fixture/fixture"
+import { InstanceState } from "@/effect/instance-state"
+import { disposeAllInstances, TestInstance, withTmpdirInstance } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
+
+// Fixed seed so mutation testing (Stryker, hand-written mutants) gives the same inputs on every run.
+fc.configureGlobal({ seed: 42 })
 
 afterEach(() => disposeAllInstances())
 
@@ -182,6 +187,128 @@ it.instance("R1: an allowed edit touching unfamiliar files always waits on a pro
   }),
 )
 
+// Replies "Allow always" to an ordinary (not forced) edit prompt. The edit tools send `always: ["*"]`, so this
+// approves every later edit, and only R1 (unfamiliar files) can still stop one.
+const approveAll = Effect.gen(function* () {
+  const permission = yield* Permission.Service
+  const request = editRequest({ patterns: ["src/a.ts"], unfamiliarFiles: [], ruleset: [] })
+  const fiber = yield* permission.ask(request).pipe(Effect.forkScoped)
+  yield* waitForPrompt(request.id)
+  yield* permission.reply({ requestID: request.id, reply: "always" })
+  yield* Fiber.join(fiber)
+})
+
+// R1 + R3 with several prompts pending at once.
+// Kind: model / oracle
+// Generators: each run starts from a fresh opencode instance in one of four states (opted into "always allow"
+// for unfamiliar edits or not, an earlier "Allow always" on an ordinary prompt or not). Up to four edits, in two
+// sessions, are asked at once: allowed or ask-only by the rules, with any subset of files unfamiliar (including none).
+// The student then answers one pending prompt with once, always, or reject.
+// The model says, for each edit, whether it applies at once, applies with a notice, or waits on a prompt (forced or
+// ordinary), and after the reply, which waiting edits are released, rejected, or still waiting. In particular: an
+// allowed edit with no unfamiliar files never stops (R1's scope), "always" on an ordinary prompt never opts into
+// unfamiliar auto-allow, and nothing releases a waiting unfamiliar edit except the student's reply or the opt-in.
+const pendingCaseArb = fc.record({
+  optedIn: fc.boolean(),
+  approvedAll: fc.boolean(),
+  items: fc.array(
+    fc.record({
+      session: fc.constantFrom("ses_main", "ses_main", "ses_main", "ses_other"),
+      allowed: fc.boolean(),
+      unfamiliarFiles: fc.subarray(POOL),
+    }),
+    // At least two, so a reply to one prompt can wrongly release another.
+    { minLength: 2, maxLength: 4 },
+  ),
+  target: fc.nat(),
+  reply: fc.constantFrom<"once" | "always" | "reject">("once", "always", "always", "always", "reject"),
+})
+
+it.instance("R1 + R3: with several prompts pending, a reply releases exactly the edits the model allows", () =>
+  Effect.gen(function* () {
+    const run = yield* runner
+    yield* Effect.promise(() =>
+      fc.assert(
+        fc.asyncProperty(pendingCaseArb, (input) =>
+          run(
+            Effect.gen(function* () {
+              const permission = yield* Permission.Service
+              const asked = yield* recordAsked
+              if (input.optedIn) yield* optIn
+              if (input.approvedAll) yield* approveAll
+              let optedIn = input.optedIn
+              let approvedAll = input.approvedAll
+
+              type Status = "pending" | "applied" | "rejected"
+              const items = []
+              for (const item of input.items) {
+                const base = editRequest({
+                  patterns: item.unfamiliarFiles.length > 0 ? item.unfamiliarFiles : ["src/a.ts"],
+                  unfamiliarFiles: item.unfamiliarFiles,
+                  ruleset: item.allowed ? [{ permission: "edit", pattern: "*", action: "allow" }] : [],
+                })
+                const request = { ...base, sessionID: SessionID.make(item.session) }
+                const needsAsk = !item.allowed && !approvedAll
+                const unfamiliar = item.unfamiliarFiles.length > 0
+                const notice = !needsAsk && unfamiliar && optedIn
+                const status: Status = !needsAsk && (!unfamiliar || optedIn) ? "applied" : "pending"
+                const forced = status === "pending" && !needsAsk
+                const fiber = yield* permission.ask(request).pipe(Effect.exit, Effect.forkScoped)
+                if (status === "pending") yield* waitForPrompt(request.id)
+                else expect(Exit.isSuccess(yield* Fiber.join(fiber).pipe(Effect.timeout("1 second")))).toBe(true)
+
+                const events = asked.filter((event) => event.id === request.id).map((event) => event.metadata)
+                expect(events).toEqual(
+                  notice
+                    ? [{ ...request.metadata, unfamiliarAutoAllowed: true }]
+                    : status === "applied"
+                      ? []
+                      : [forced ? { ...request.metadata, unfamiliarForced: true } : request.metadata],
+                )
+                items.push({ request, fiber, status: status as Status, forced, unfamiliar })
+              }
+
+              const waiting = items.filter((item) => item.status === "pending")
+              if (waiting.length > 0) {
+                const target = waiting[input.target % waiting.length]
+                yield* permission.reply({ requestID: target.request.id, reply: input.reply })
+                target.status = input.reply === "reject" ? "rejected" : "applied"
+                if (input.reply === "always") {
+                  if (target.forced) optedIn = true
+                  else approvedAll = true
+                }
+                for (const item of waiting) {
+                  if (item === target || item.request.sessionID !== target.request.sessionID) continue
+                  if (input.reply === "reject") item.status = "rejected"
+                  if (input.reply !== "always") continue
+                  const ok = (optedIn && item.forced) || approvedAll
+                  if (ok && !(item.unfamiliar && !optedIn)) item.status = "applied"
+                }
+              }
+
+              for (const item of items) {
+                if (item.status === "pending") {
+                  expect(yield* isPending(item.request.id)).toBe(true)
+                  continue
+                }
+                const exit = yield* Fiber.join(item.fiber).pipe(Effect.timeout("1 second"))
+                expect(Exit.isSuccess(exit)).toBe(item.status === "applied")
+                expect(yield* isPending(item.request.id)).toBe(false)
+              }
+
+              // Clean up: reject whatever is still waiting so no fiber is left behind.
+              for (const item of yield* permission.list())
+                yield* permission.reply({ requestID: item.id, reply: "reject" }).pipe(Effect.ignore)
+            }).pipe(withTmpdirInstance(), Effect.scoped),
+          ),
+        ),
+        { numRuns: 150 },
+      ),
+    )
+    console.log("R1 + R3 (pending prompts): passed 150 random runs")
+  }),
+)
+
 // R3: After the student opts into "always allow" on an unfamiliar-file prompt, later AI edits to unfamiliar files
 // that their rules allow apply without a prompt, with a notice naming each unfamiliar file. Edits their rules would
 // ask about are still prompted.
@@ -264,10 +391,13 @@ it.instance("R6: a denied edit stays denied with no prompt or notice, before and
 
 type AskInput = Parameters<Tool.Context["ask"]>[0]
 
-// Runs the real edit tool. `approve` plays the student: the tool's permission request is recorded, then approved or
-// rejected (a rejection reaches the tool as a failure, as with the real permission service).
-const runEdit = (args: Tool.InferParameters<typeof EditTool>, approve: boolean) =>
+// Runs a real file tool (edit or apply_patch). `approve` plays the student: the tool's permission request is
+// recorded, then approved or rejected (a rejection reaches the tool as a failure, as with the real permission
+// service). Given a ruleset instead, the request goes to the real permission service, as in a live session.
+type Answer = boolean | { ruleset: Rule[] }
+const runTool = <R>(execute: (ctx: Tool.Context) => Effect.Effect<unknown, unknown, R>, answer: Answer) =>
   Effect.gen(function* () {
+    const permission = yield* Permission.Service
     const asks: AskInput[] = []
     const ctx: Tool.Context = {
       sessionID: SessionID.make("ses_property"),
@@ -280,13 +410,34 @@ const runEdit = (args: Tool.InferParameters<typeof EditTool>, approve: boolean) 
       ask: (input) =>
         Effect.suspend(() => {
           asks.push(input)
-          return approve ? Effect.void : Effect.die(new Error("rejected"))
+          if (typeof answer === "object")
+            return permission
+              .ask({ ...input, sessionID: SessionID.make("ses_property"), ruleset: answer.ruleset })
+              .pipe(Effect.orDie)
+          return answer ? Effect.void : Effect.die(new Error("rejected"))
         }),
     }
-    const tool = yield* (yield* EditTool).init()
-    const exit = yield* tool.execute(args, ctx).pipe(Effect.exit)
-    return { ask: asks[0], applied: Exit.isSuccess(exit) }
+    const exit = yield* execute(ctx).pipe(Effect.exit, Effect.timeout("2 seconds"), Effect.option)
+    return { ask: asks[0], applied: exit._tag === "Some" && Exit.isSuccess(exit.value) }
   })
+const runEdit = (args: Tool.InferParameters<typeof EditTool>, answer: Answer) =>
+  runTool(
+    (ctx) =>
+      Effect.flatMap(
+        Effect.flatMap(EditTool, (info) => info.init()),
+        (tool) => tool.execute(args, ctx),
+      ),
+    answer,
+  )
+const runPatch = (args: Tool.InferParameters<typeof ApplyPatchTool>, answer: Answer) =>
+  runTool(
+    (ctx) =>
+      Effect.flatMap(
+        Effect.flatMap(ApplyPatchTool, (info) => info.init()),
+        (tool) => tool.execute(args, ctx),
+      ),
+    answer,
+  )
 
 const writeFile = (file: string, content: string) =>
   Effect.promise(async () => {
@@ -294,15 +445,71 @@ const writeFile = (file: string, content: string) =>
     await fs.writeFile(file, content)
   })
 
+// R6 end to end: the property above feeds the permission service requests built by hand, so it cannot notice the
+// edit tool describing its file wrongly (e.g. no patterns), which would make every deny rule miss.
+// Kind: invariant
+// Generators: a fresh file, familiar or not (made familiar by an approved edit first), and a deny rule naming it by
+// exact path, directory glob or "*", on "edit" or "*", after a blanket allow. For every such case, the real edit tool's
+// request is denied: the edit fails, the file is unchanged, and nothing is left waiting on the student.
+it.instance("R6: the edit tool's own request is denied by any deny rule naming its file, familiar or not", () =>
+  Effect.gen(function* () {
+    const test = yield* TestInstance
+    const run = yield* runner
+    let runIndex = 0
+    yield* Effect.promise(() =>
+      fc.assert(
+        fc.asyncProperty(
+          fc.record({
+            file: fc.nat({ max: FILES.length - 1 }),
+            familiar: fc.boolean(),
+            shape: fc.constantFrom("exact", "dir", "all"),
+            permission: fc.constantFrom("edit", "*"),
+          }),
+          (input) =>
+            run(
+              Effect.gen(function* () {
+                const absolute = path.join(test.directory, `r6-${runIndex++}`, FILES[input.file])
+                yield* writeFile(absolute, "v0\n")
+                if (input.familiar) yield* runEdit({ filePath: absolute, oldString: "v0\n", newString: "v1\n" }, true)
+                const before = yield* Effect.promise(() => fs.readFile(absolute, "utf-8"))
+
+                const relative = path.relative((yield* InstanceState.context).worktree, absolute)
+                const pattern =
+                  input.shape === "exact" ? relative : input.shape === "dir" ? `${path.dirname(relative)}/*` : "*"
+                const ruleset: Rule[] = [
+                  { permission: "edit", pattern: "*", action: "allow" },
+                  { permission: input.permission, pattern, action: "deny" },
+                ]
+                const { applied } = yield* runEdit(
+                  { filePath: absolute, oldString: before, newString: "x\n" },
+                  { ruleset },
+                )
+
+                expect(applied).toBe(false)
+                expect(yield* Effect.promise(() => fs.readFile(absolute, "utf-8"))).toBe(before)
+                expect(yield* Permission.Service.use((permission) => permission.list())).toEqual([])
+              }),
+            ),
+        ),
+        { numRuns: 30 },
+      ),
+    )
+    console.log("R6 (edit tool): passed 30 random runs")
+  }),
+)
+
 // Generators: a run is a sequence of student actions on three existing files, so the same file is hit repeatedly and
-// every ordering of approve / reject / revert comes up (C-4, C-5, S-5, S-6, O-4). Each edit spells its path as
-// absolute, relative, or "dir/../dir/..." to check that familiarity follows the file, not the string. "Revert" is
-// the student undoing the file by hand outside opencode (C-6): the content goes back, familiarity must not.
+// every ordering of approve / reject / revert comes up (C-4, C-5, S-5, S-6, O-4). An AI change is either an edit, with
+// the path spelled absolute, relative, or "dir/../dir/..." to check that familiarity follows the file, not the string,
+// or a rename through apply_patch (O-5, O-6), after which the file lives at its new path. "Revert" is the student
+// undoing the content by hand outside opencode (C-6): the content goes back, familiarity must not. "Create" is the AI
+// creating a brand-new file, which R1 never flags (only existing files can be unfamiliar).
 const FILES = ["src/a.txt", "src/nested/b.txt", "teammate/owned.txt"]
 const actionsArb = fc.array(
   fc.record({
     file: fc.nat({ max: FILES.length - 1 }),
-    kind: fc.constantFrom("approve", "reject", "approve", "reject", "revert"),
+    kind: fc.constantFrom("approve", "reject", "approve", "reject", "revert", "create"),
+    tool: fc.constantFrom("edit", "edit", "rename"),
     spelling: fc.constantFrom("absolute", "relative", "dotdot"),
   }),
   { minLength: 1, maxLength: 12 },
@@ -312,9 +519,10 @@ const actionsArb = fc.array(
 // R5: Once an AI edit to a file is applied, by prompt approval or under "always allow" (R3), later AI edits to that
 // file are not flagged as unfamiliar while opencode runs in that project. Reverting the edit does not undo this.
 // Kind: model / oracle
-// The model is a plain Set of files, added to only on approval and never removed. After every action, the real edit
-// tool must agree with it: the edit's prompt lists the file exactly when the model says it is unfamiliar, and only an
-// approved edit changes the file.
+// The model is a plain Set of files, added to only on approval and never removed, plus each file's current path.
+// After every action, the real tool must agree with it: the prompt lists the file (at the path being changed) exactly
+// when the model says it is unfamiliar, only an approved change touches the disk, and a renamed file stays familiar
+// at its new path. A newly created file is never listed.
 it.instance("R2 + R5: the files an edit flags as unfamiliar match a set that only grows on approval", () =>
   Effect.gen(function* () {
     const test = yield* TestInstance
@@ -327,18 +535,59 @@ it.instance("R2 + R5: the files an edit flags as unfamiliar match a set that onl
           run(
             Effect.gen(function* () {
               // Familiarity lasts as long as the instance, so each run gets fresh files.
-              const files = FILES.map((file) => `run${runIndex}/${file}`)
-              runIndex++
+              const prefix = `run${runIndex++}`
+              const files = FILES.map((file) => `${prefix}/${file}`)
+              const label = [...files]
               const content = files.map((file) => `${file} v0\n`)
               for (const [i, file] of files.entries()) yield* writeFile(path.join(test.directory, file), content[i])
               const familiar = new Set<number>()
+              const read = (relative: string) =>
+                Effect.promise(() => fs.readFile(path.join(test.directory, relative), "utf-8").catch(() => undefined))
 
               for (const [step, action] of actions.entries()) {
                 const relative = files[action.file]
                 const absolute = path.join(test.directory, relative)
                 if (action.kind === "revert") {
-                  content[action.file] = `${relative} v0\n`
+                  content[action.file] = `${label[action.file]} v0\n`
                   yield* writeFile(absolute, content[action.file])
+                  continue
+                }
+
+                if (action.kind === "create") {
+                  const created = `${prefix}/created${step}.txt`
+                  const { ask, applied } = yield* runEdit(
+                    { filePath: path.join(test.directory, created), oldString: "", newString: "new file\n" },
+                    true,
+                  )
+                  expect(ask.metadata.unfamiliarFiles).toEqual([])
+                  expect(applied).toBe(true)
+                  continue
+                }
+
+                const next = `${label[action.file]} v${step + 1}\n`
+                const approve = action.kind === "approve"
+                if (action.tool === "rename") {
+                  const moved = `${prefix}/moved${step}/${path.basename(relative)}`
+                  const patchText = [
+                    "*** Begin Patch",
+                    `*** Update File: ${relative}`,
+                    `*** Move to: ${moved}`,
+                    "@@",
+                    `-${content[action.file].trimEnd()}`,
+                    `+${next.trimEnd()}`,
+                    "*** End Patch",
+                  ].join("\n")
+                  const { ask, applied } = yield* runPatch({ patchText }, approve)
+
+                  expect(ask.metadata.unfamiliarFiles).toEqual(familiar.has(action.file) ? [] : [absolute])
+                  expect(applied).toBe(approve)
+                  if (approve) {
+                    familiar.add(action.file)
+                    content[action.file] = next
+                    files[action.file] = moved
+                    expect(yield* read(relative)).toBeUndefined()
+                  }
+                  expect(yield* read(files[action.file])).toBe(content[action.file])
                   continue
                 }
 
@@ -348,8 +597,6 @@ it.instance("R2 + R5: the files an edit flags as unfamiliar match a set that onl
                     : action.spelling === "relative"
                       ? relative
                       : relative.replace("/", "/../" + relative.split("/")[0] + "/")
-                const next = `${relative} v${step + 1}\n`
-                const approve = action.kind === "approve"
                 const { ask, applied } = yield* runEdit(
                   { filePath, oldString: content[action.file], newString: next },
                   approve,
@@ -361,7 +608,7 @@ it.instance("R2 + R5: the files an edit flags as unfamiliar match a set that onl
                   familiar.add(action.file)
                   content[action.file] = next
                 }
-                expect(yield* Effect.promise(() => fs.readFile(absolute, "utf-8"))).toBe(content[action.file])
+                expect(yield* read(relative)).toBe(content[action.file])
               }
             }),
           ),
@@ -373,44 +620,66 @@ it.instance("R2 + R5: the files an edit flags as unfamiliar match a set that onl
   }),
 )
 
-// Generators: a file is a list of code lines, each tagged "#n;" so the replaced block matches exactly once. Lines mix
-// indentation (none, two or four spaces, a tab), and files often share one indent on every line (like a function
-// body), because the shared indent is what the diff display trims, and mixing tabs with spaces is where trimming goes
-// wrong. The edit replaces any block of lines with zero to three new ones: deletions, changes and insertions.
-const linesArb = (minLength: number, maxLength: number) =>
-  fc.array(
-    fc
-      .tuple(fc.constantFrom("", "  ", "    ", "\t"), fc.constantFrom("const x = 1", "return value", "}"))
-      .map(([indent, text]) => indent + text),
-    { minLength, maxLength },
-  )
+// Generators: a file is a list of lines. Most are code lines, each tagged "#n;" so the replaced block matches exactly
+// once. Lines mix indentation (none, two or four spaces, a tab), and files often share one indent on every code line
+// (like a function body), because the shared indent is what the diff display trims, and mixing tabs with spaces is
+// where trimming goes wrong. Some lines are raw, at column 0 (see rawLineArb): blank lines must not decide the
+// shared indent, and "--"/"++" lines must not be mistaken for diff headers. The edit replaces a block of lines that starts at a code line with zero to three new code
+// lines: deletions, changes and insertions.
+const codeLineArb = fc
+  .tuple(fc.constantFrom("", "  ", "    ", "\t"), fc.constantFrom("const x = 1", "return value", "}"))
+  .map(([indent, text]) => ({ code: indent + text }))
+// Raw lines sit at column 0 whatever the shared indent: blank or whitespace-only lines, and lines whose text starts
+// with "--" or "++" (an SQL comment, a Markdown rule, `++i`). Once a diff marker is prepended, the latter look like
+// the "---"/"+++" file headers, so the display must still treat them as content.
+const rawLineArb = fc.constantFrom("", "  ", "\t", "-- note", "--- rule", "++count").map((raw) => ({ raw }))
+type GenLine = { code: string } | { raw: string }
 const editCaseArb = fc
   .record({
     shared: fc.constantFrom("", "  ", "\t"),
-    lines: linesArb(1, 12),
-    replacement: linesArb(0, 3),
+    lines: fc
+      .array(fc.oneof({ weight: 3, arbitrary: codeLineArb }, { weight: 1, arbitrary: rawLineArb }), {
+        minLength: 1,
+        maxLength: 12,
+      })
+      .filter((lines) => lines.some((line) => "code" in line)),
+    replacement: fc.array(fc.oneof({ weight: 3, arbitrary: codeLineArb }, { weight: 1, arbitrary: rawLineArb }), {
+      maxLength: 3,
+    }),
   })
   .chain(({ shared, lines, replacement }) => {
-    const render = (tag: string) => (line: string, i: number) => `${shared}${line} #${tag}${i};`
+    const render = (tag: string) => (line: GenLine, i: number) =>
+      "code" in line ? `${shared}${line.code} #${tag}${i};` : line.raw
     const old = lines.map(render(""))
-    return fc
-      .tuple(fc.nat({ max: old.length - 1 }), fc.integer({ min: 1, max: old.length }))
-      .map(([start, length]) => ({
-        before: old.join("\n") + "\n",
-        oldString: old.slice(start, start + length).join("\n"),
-        newString: replacement.map(render("new")).join("\n"),
-      }))
+    const starts = lines.flatMap((line, i) => ("code" in line ? [i] : []))
+    return fc.tuple(fc.constantFrom(...starts), fc.nat()).map(([start, extra]) => ({
+      before: old.join("\n") + "\n",
+      oldString: old.slice(start, start + 1 + (extra % (old.length - start))).join("\n"),
+      newString: replacement.map(render("new")).join("\n"),
+    }))
   })
 
-const isContentLine = (line: string) => /^[+\- ]/.test(line) && !/^(---|\+\+\+)/.test(line)
+// A unified diff's "---"/"+++" file headers come before the first "@@" hunk header; every line after it that starts
+// with "+", "-" or " " is content, even if its text makes it start with "---" or "+++".
+const contentFlags = (lines: string[]) => {
+  const firstHunk = lines.findIndex((line) => line.startsWith("@@"))
+  return lines.map((line, i) => firstHunk >= 0 && i > firstHunk && /^[+\- ]/.test(line))
+}
+const commonPrefix = (a: string, b: string) => {
+  let i = 0
+  while (i < a.length && i < b.length && a[i] === b[i]) i++
+  return a.slice(0, i)
+}
 
 // R7: Each notice for an AI edit applied without a prompt carries the edit's diff, showing every changed line in
-// order with its indentation relative to its context. The display may only remove one indent shared by all lines.
+// order with its indentation relative to its context. The display removes exactly the indent shared by every
+// non-blank line, and nothing else.
 // Kind: model / oracle
 // The oracle is the untrimmed unified diff of the old and new content. The notice carries the edit tool's request
-// metadata unchanged (checked by R3), so the diff in that request must match the oracle line for line, except that
-// one whitespace string w, the same for every line, may be missing from the front of each content line.
-it.instance("R7: the diff shown for an unfamiliar edit is the real diff, minus at most one shared indent", () =>
+// metadata unchanged (checked by R3), so the diff in that request must equal the oracle with w removed from the front
+// of each content line, where w is the longest whitespace prefix shared by all non-blank content lines. A blank or
+// whitespace-only line loses only the part of w it actually has.
+it.instance("R7: the diff shown for an unfamiliar edit is the real diff minus exactly its shared indent", () =>
   Effect.gen(function* () {
     const test = yield* TestInstance
     const run = yield* runner
@@ -430,14 +699,14 @@ it.instance("R7: the diff shown for an unfamiliar edit is the real diff, minus a
               const written = yield* Effect.promise(() => fs.readFile(file, "utf-8"))
 
               const oracle = createTwoFilesPatch(file, file, input.before, written).split("\n")
-              const shown = String(ask.metadata.diff).split("\n")
-              const content = oracle.findIndex(isContentLine)
-              const w = oracle[content].slice(1, oracle[content].length - shown[content].length + 1)
-              expect(w.trim()).toBe("")
-              // Each line must lose exactly the string w, not just w.length characters of whatever whitespace it has.
-              const trim = (line: string) =>
-                isContentLine(line) && line.slice(1).startsWith(w) ? line[0] + line.slice(1 + w.length) : line
-              expect(shown).toEqual(oracle.map(trim))
+              const content = contentFlags(oracle)
+              const indents = oracle
+                .filter((line, i) => content[i] && line.slice(1).trim() !== "")
+                .map((line) => line.slice(1).match(/^\s*/)![0])
+              const w = indents.length > 0 ? indents.reduce(commonPrefix) : ""
+              const trim = (line: string, i: number) =>
+                content[i] ? line[0] + line.slice(1 + commonPrefix(line.slice(1), w).length) : line
+              expect(String(ask.metadata.diff).split("\n")).toEqual(oracle.map(trim))
             }),
           ),
         ),
