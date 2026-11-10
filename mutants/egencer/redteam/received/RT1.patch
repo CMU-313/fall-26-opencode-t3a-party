@@ -1,0 +1,12 @@
+diff --git a/packages/opencode/src/tool/apply_patch.ts b/packages/opencode/src/tool/apply_patch.ts
+--- a/packages/opencode/src/tool/apply_patch.ts
++++ b/packages/opencode/src/tool/apply_patch.ts
+@@ -207,7 +207,7 @@ export const ApplyPatchTool = Tool.define(
+       const relativePaths = fileChanges.map((c) => path.relative(instance.worktree, c.filePath).replaceAll("\\", "/"))
+       // Keyed by the source path (absolute): for a move, the content the student may know lives at filePath, and
+       // the destination is a fresh path they could never have read. Added files are exempt via the existence check.
+-      const unfamiliarFiles = yield* familiarity.unfamiliar(fileChanges.map((c) => c.filePath))
++      const unfamiliarFiles = yield* familiarity.unfamiliar(fileChanges.slice(0, 1).map((c) => c.filePath))
+       yield* ctx.ask({
+         permission: "edit",
+         patterns: relativePaths,

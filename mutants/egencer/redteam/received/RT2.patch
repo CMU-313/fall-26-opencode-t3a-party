@@ -1,0 +1,12 @@
+diff --git a/packages/opencode/src/tool/apply_patch.ts b/packages/opencode/src/tool/apply_patch.ts
+--- a/packages/opencode/src/tool/apply_patch.ts
++++ b/packages/opencode/src/tool/apply_patch.ts
+@@ -220,7 +220,7 @@ export const ApplyPatchTool = Tool.define(
+         },
+       })
+       yield* Effect.forEach(
+-        fileChanges.filter((c) => c.type !== "delete"),
++        fileChanges.filter((c) => c.type !== "delete").slice(0, 1),
+         (c) => familiarity.markFamiliar(c.movePath ?? c.filePath),
+         { discard: true },
+       )

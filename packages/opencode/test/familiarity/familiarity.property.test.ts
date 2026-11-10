@@ -509,8 +509,12 @@ const actionsArb = fc.array(
   fc.record({
     file: fc.nat({ max: FILES.length - 1 }),
     kind: fc.constantFrom("approve", "reject", "approve", "reject", "revert", "create"),
-    tool: fc.constantFrom("edit", "edit", "rename"),
+    tool: fc.constantFrom("edit", "edit", "patch"),
     spelling: fc.constantFrom("absolute", "relative", "dotdot"),
+    // A patch changes several files in one call (red team, yswc): any non-empty subset of the run's files, in any
+    // order, so a familiar file often comes before an unfamiliar one. Each file is either updated or renamed.
+    others: fc.shuffledSubarray([0, 1, 2], { minLength: 0 }),
+    moves: fc.array(fc.boolean(), { minLength: FILES.length, maxLength: FILES.length }),
   }),
   { minLength: 1, maxLength: 12 },
 )
@@ -566,28 +570,52 @@ it.instance("R2 + R5: the files an edit flags as unfamiliar match a set that onl
 
                 const next = `${label[action.file]} v${step + 1}\n`
                 const approve = action.kind === "approve"
-                if (action.tool === "rename") {
-                  const moved = `${prefix}/moved${step}/${path.basename(relative)}`
+                if (action.tool === "patch") {
+                  // action.file first, then the others in their shuffled order: one apply_patch call over all of them.
+                  const touched = [action.file, ...action.others.filter((i) => i !== action.file)]
+                  const changes = touched.map((i) => ({
+                    i,
+                    from: files[i],
+                    to: action.moves[i] ? `${prefix}/moved${step}/${path.basename(files[i])}` : files[i],
+                    old: content[i].trimEnd(),
+                    next: `${label[i]} v${step + 1}`,
+                  }))
                   const patchText = [
                     "*** Begin Patch",
-                    `*** Update File: ${relative}`,
-                    `*** Move to: ${moved}`,
-                    "@@",
-                    `-${content[action.file].trimEnd()}`,
-                    `+${next.trimEnd()}`,
+                    ...changes.flatMap((c) => [
+                      `*** Update File: ${c.from}`,
+                      ...(c.to !== c.from ? [`*** Move to: ${c.to}`] : []),
+                      "@@",
+                      `-${c.old}`,
+                      `+${c.next}`,
+                    ]),
                     "*** End Patch",
                   ].join("\n")
                   const { ask, applied } = yield* runPatch({ patchText }, approve)
 
-                  expect(ask.metadata.unfamiliarFiles).toEqual(familiar.has(action.file) ? [] : [absolute])
+                  // R1: every unfamiliar file the patch changes is flagged, in patch order, not just the first.
+                  expect(ask.metadata.unfamiliarFiles).toEqual(
+                    changes.filter((c) => !familiar.has(c.i)).map((c) => path.join(test.directory, c.from)),
+                  )
+                  // R7: the diff in the request shows every changed line of every file, in patch order.
+                  const diff = String(ask.metadata.diff)
+                  const positions = changes.flatMap((c) => [
+                    diff.indexOf(`\n-${c.old}\n`),
+                    diff.indexOf(`\n+${c.next}\n`),
+                  ])
+                  expect(positions.every((p) => p >= 0)).toBe(true)
+                  expect(positions).toEqual([...positions].sort((a, b) => a - b))
                   expect(applied).toBe(approve)
-                  if (approve) {
-                    familiar.add(action.file)
-                    content[action.file] = next
-                    files[action.file] = moved
-                    expect(yield* read(relative)).toBeUndefined()
+                  for (const c of changes) {
+                    if (approve) {
+                      // R5: every file an approved patch changes becomes familiar, not just the first.
+                      familiar.add(c.i)
+                      content[c.i] = `${c.next}\n`
+                      files[c.i] = c.to
+                      if (c.to !== c.from) expect(yield* read(c.from)).toBeUndefined()
+                    }
+                    expect(yield* read(files[c.i])).toBe(content[c.i])
                   }
-                  expect(yield* read(files[action.file])).toBe(content[action.file])
                   continue
                 }
 

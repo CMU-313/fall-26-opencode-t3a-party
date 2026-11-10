@@ -1,0 +1,12 @@
+diff --git a/packages/opencode/src/tool/apply_patch.ts b/packages/opencode/src/tool/apply_patch.ts
+--- a/packages/opencode/src/tool/apply_patch.ts
++++ b/packages/opencode/src/tool/apply_patch.ts
+@@ -214,7 +214,7 @@ export const ApplyPatchTool = Tool.define(
+         always: ["*"],
+         metadata: {
+           filepath: relativePaths.join(", "),
+-          diff: totalDiff,
++          diff: fileChanges[0]?.diff ?? "",
+           files,
+           unfamiliarFiles,
+         },

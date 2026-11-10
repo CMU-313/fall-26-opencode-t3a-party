@@ -6,7 +6,7 @@
 
 Interview evidence IDs refer to the Project 3 workbook: C-n = classmate, S-n = course staff, O-n = outside interviewee.
 
-**AI use:** All properties and generators in `familiarity.property.test.ts` (R1, R2 + R5, R3, R6, R7), the two Step 3 code fixes, and the R6 regression test in `test/permission/next.test.ts` were written by Claude at my direction. I chose how to resolve each failure (fix the code for R6; narrow the requirement for R7) and reviewed every property against its requirement and acceptance criteria. In Project 5, the strengthened properties (the new R1 + R3 pending-prompts property, the new R6 edit-tool property, the rename and create actions in R2 + R5, and the stricter R7 oracle) were also written by Claude at my direction; I chose which survivors to target and checked each new property against the mutants it was meant to kill.
+**AI use:** All properties and generators in `familiarity.property.test.ts` (R1, R2 + R5, R3, R6, R7), the two Step 3 code fixes, and the R6 regression test in `test/permission/next.test.ts` were written by Claude at my direction. I chose how to resolve each failure (fix the code for R6; narrow the requirement for R7) and reviewed every property against its requirement and acceptance criteria. In Project 5, the strengthened properties (the new R1 + R3 pending-prompts property, the new R6 edit-tool property, the rename, create and multi-file patch actions in R2 + R5, and the stricter R7 oracle) were also written by Claude at my direction; I chose which survivors to target and checked each new property against the mutants it was meant to kill.
 
 **Run:** `cd packages/opencode && bun test test/familiarity/familiarity.property.test.ts test/familiarity/r7.opencode.property.test.ts`. All 8 properties pass (7 mine, plus the strengthened opencode-written R7 property), with the fast-check seed fixed at 42 (`fc.configureGlobal`). They run in CI as part of `opencode#test` (already listed in `turbo.json`).
 
@@ -242,3 +242,15 @@ expect(trimDiff(raw)).toBe(expected)
 | H7 applied | passes (**mutant survives**) | fails: `{"indent":"  ","before":"-- note\n  ","after":"  \ta\n  "}` |
 
 The main R7 property in `familiarity.property.test.ts` had the same blind spot until P5: its `isContentLine` also copied the `---`/`+++` text test. Fixing it there is what exposed the real bug (see Stryker comparison).
+
+## Red team
+
+Mutants received from **Cathy W. (cathyw)**, posted as a comment on this PR against commit `078de8a`. Patches: `mutants/egencer/redteam/received/RT1.patch`–`RT3.patch`.
+
+| Mutant | Requirement | Change | Result | Fix |
+| --- | --- | --- | --- | --- |
+| RT1 | R1 | `apply_patch` checks only the first changed file for unfamiliarity. | Survived | Killed by strengthening the R2 + R5 property (below). It fails when a patch changes a familiar file and then an unfamiliar one, because the unfamiliar second file is missing from the request. |
+| RT2 | R5 | After approval, `apply_patch` marks only the first changed file as familiar. | Survived | Killed by the same change. It fails when a later edit to the patch's second file is still flagged as unfamiliar. |
+| RT3 | R7 | The request's diff contains only the first file's changes. | Survived | Killed by the same change. It fails because the second file's changed lines are missing from the diff. |
+
+**Fix:** In the R2 + R5 property in `familiarity.property.test.ts`, the single-file rename step became an `apply_patch` call that changes several files in random order. After each patch, the property checks that the request lists every unfamiliar file and shows every file's changed lines, and that approving the patch makes every file familiar. All 8 properties still pass on the real code.
