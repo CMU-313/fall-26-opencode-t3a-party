@@ -1,0 +1,8 @@
+--- a/sdks/vscode/src/explain.ts
++++ b/sdks/vscode/src/explain.ts
+@@ -59,7 +59,7 @@
+     "Suggest code for the student's current cursor position.",
+     "Use the surrounding code below and inspect other relevant project files with read-only tools if needed.",
+-    "Do not modify any files. Return the suggested code first, followed by a clear, beginner-friendly explanation",
++    "Avoid modifying files unless truly necessary. Return the suggested code first, followed by a clear, beginner-friendly explanation",
+     "of what it does and why it works. Keep the explanation under 120 words and use short sentences or bullets.",

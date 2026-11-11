@@ -1,0 +1,8 @@
+--- a/sdks/vscode/src/explain.ts
++++ b/sdks/vscode/src/explain.ts
+@@ -76,5 +76,5 @@
+ function codeFence(text: string) {
+   const longestFence = Math.max(2, ...Array.from(text.matchAll(/`+/g), (match) => match[0].length))
+-  return "`".repeat(longestFence + 1)
++  return "`".repeat(longestFence)
+ }
