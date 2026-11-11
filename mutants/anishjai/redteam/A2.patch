@@ -1,0 +1,14 @@
+diff --git a/packages/opencode/src/session/prompt.ts b/packages/opencode/src/session/prompt.ts
+index 024cec6..aa5956a 100644
+--- a/packages/opencode/src/session/prompt.ts
++++ b/packages/opencode/src/session/prompt.ts
+@@ -1351,7 +1351,8 @@ const layer = Layer.effect(
+     const shell: (input: ShellInput) => Effect.Effect<SessionV1.WithParts, Session.BusyError> = Effect.fn(
+       "SessionPrompt.shell",
+     )(function* (input: ShellInput) {
+-      if (input.agent === "learn") {
++      // Learn is read-only, but students still need to check git status/diff (S-21, C-22)
++      if (input.agent === "learn" && !/^git (status|diff|log)\b/.test(input.command)) {
+         const error = new NamedError.Unknown({ message: "Learn mode does not allow shell commands." })
+         yield* events.publish(Session.Event.Error, { sessionID: input.sessionID, error: error.toObject() })
+         throw error
