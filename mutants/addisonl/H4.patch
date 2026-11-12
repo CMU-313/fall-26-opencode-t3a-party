@@ -1,0 +1,13 @@
+diff --git a/packages/opencode/src/git/provenance.ts b/packages/opencode/src/git/provenance.ts
+index a45050b..00aa715 100644
+--- a/packages/opencode/src/git/provenance.ts
++++ b/packages/opencode/src/git/provenance.ts
+@@ -88,7 +88,7 @@ const layer = Layer.effect(
+       // Line numbers refer to the last committed version, which is what `git log -L` reads, so uncommitted
+       // edits cannot shift or invalidate the range. git log -L itself only rejects a start past the end and
+       // silently clamps the end, so the committed length is checked here.
+-      const committed = yield* git.run(["cat-file", "blob", `HEAD:${rel}`], { cwd: root, env: { LC_ALL: "C" } })
++      const committed = yield* git.run(["cat-file", "blob", `:${rel}`], { cwd: root, env: { LC_ALL: "C" } })
+       if (committed.exitCode !== 0) return yield* failure(committed, "cat-file", file)
+       if (committed.truncated)
+         return yield* new ProvenanceError({ reason: "git-failed", message: "committed file exceeded the size limit" })
