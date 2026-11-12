@@ -6,3 +6,7 @@ app.log
 script/build-*.ts
 temporary-*.md
 .artifacts
+
+# Stryker mutation testing (P5): HTML report and scratch folder
+reports/
+.stryker-tmp/
