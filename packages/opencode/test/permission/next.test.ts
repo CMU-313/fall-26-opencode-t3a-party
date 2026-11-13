@@ -615,7 +615,7 @@ it.instance(
         )
         expect(err).toBeInstanceOf(PermissionV1.DeniedError)
         const denied = err as PermissionV1.DeniedError
-        expect(denied.ruleset.some((rule) => rule.permission === permission && rule.pattern === "*")).toBe(true)
+        expect(denied.ruleset.some((rule: PermissionV1.Rule) => rule.permission === permission && rule.pattern === "*")).toBe(true)
         for (const rule of denied.ruleset) {
           expect(rule.permission).toBe(permission)
         }
