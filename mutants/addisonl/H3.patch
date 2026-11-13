@@ -1,0 +1,13 @@
+diff --git a/packages/opencode/src/git/provenance.ts b/packages/opencode/src/git/provenance.ts
+index a45050b..da6855d 100644
+--- a/packages/opencode/src/git/provenance.ts
++++ b/packages/opencode/src/git/provenance.ts
+@@ -138,7 +138,7 @@ const layer = Layer.effect(
+           issueRefs: parseIssueRefs(subject),
+         } satisfies Commit
+       })
+-      return { commits: commits.slice(0, max), truncated: commits.length > max } satisfies Provenance
++      return { commits: commits.slice(0, max), truncated: commits.length >= max } satisfies Provenance
+     })
+ 
+     const get = Effect.fn("GitProvenance.get")(function* (

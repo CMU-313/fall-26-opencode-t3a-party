@@ -1,0 +1,13 @@
+diff --git a/packages/opencode/src/git/provenance.ts b/packages/opencode/src/git/provenance.ts
+index a45050b..d9c92b4 100644
+--- a/packages/opencode/src/git/provenance.ts
++++ b/packages/opencode/src/git/provenance.ts
+@@ -216,7 +216,7 @@ function failure(result: Git.Result, command: string, file: string) {
+   if (NOT_COMMITTED.some((pattern) => pattern.test(stderr)))
+     return new ProvenanceError({
+       reason: "untracked",
+-      message: `${file} has no committed history (it is untracked or only staged)`,
++      message: `${file} is not a readable file`,
+     })
+   const pastEnd = stderr.match(PAST_END)
+   if (pastEnd)
