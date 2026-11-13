@@ -2,6 +2,8 @@ import { test, expect } from "bun:test"
 import fc from "fast-check"
 import { evaluate } from "../../src/permission/evaluate"
 
+fc.configureGlobal({ seed: 42 })
+
 const PERMISSION = "bash"
 type Action = "allow" | "ask" | "deny"
 type Rule = { permission: string; pattern: string; action: Action }
@@ -92,6 +94,26 @@ test("R4: adding a rule and then removing it leaves evaluation unchanged", () =>
       const withRemoved = withAdded.slice(0, -1)
       const after = evaluate(PERMISSION, command, withRemoved as any)
       expect(after).toEqual(before)
+    }),
+  )
+})
+
+import { filterDeniedRuleset } from "../../src/permission/index"
+
+// R1/R2 (strengthened): a denial error's ruleset only contains rules that match the denied permission.
+// Kind: invariant
+test("R1/R2: a denial error's ruleset only contains rules that match the denied permission", () => {
+  const mixedRuleArb: fc.Arbitrary<Rule> = fc.record({
+    permission: fc.constantFrom("bash", "edit"),
+    pattern: fc.constantFrom(...PATTERN_COMMAND_PAIRS.map(([p]) => p)),
+    action: actionArb,
+  })
+  fc.assert(
+    fc.property(fc.array(mixedRuleArb, { maxLength: 6 }), fc.constantFrom("bash", "edit"), (ruleset, permission) => {
+      const filtered = filterDeniedRuleset(permission, ruleset as any)
+      for (const rule of filtered) {
+        expect(rule.permission).toBe(permission)
+      }
     }),
   )
 })

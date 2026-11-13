@@ -1,0 +1,13 @@
+diff --git a/packages/opencode/src/permission/index.ts b/packages/opencode/src/permission/index.ts
+index 19fd549..29438fb 100644
+--- a/packages/opencode/src/permission/index.ts
++++ b/packages/opencode/src/permission/index.ts
+@@ -35,7 +35,7 @@ export function evaluate(permission: string, pattern: string, ...rulesets: Permi
+     rulesets
+       .flat()
+       .findLast((rule) => Wildcard.match(permission, rule.permission) && Wildcard.match(pattern, rule.pattern)) ?? {
+-      action: "ask",
++      action: "allow",
+       permission,
+       pattern: "*",
+     }
