@@ -13,6 +13,9 @@ import { SessionV2 } from "@opencode-ai/core/session"
 import { SessionTable } from "@opencode-ai/core/session/sql"
 import { testEffect } from "../lib/effect"
 
+// Fixed seed so mutation runs (hand-written and Stryker) are reproducible.
+fc.configureGlobal({ seed: 42 })
+
 // Property tests for `opencode report` (EditDecision.summary). Requirement IDs match traceability/anishjai.md.
 
 const it = testEffect(AppNodeBuilder.build(LayerNode.group([Database.node, EditDecision.node])))
@@ -188,6 +191,12 @@ describe("report properties", () => {
               expect(total.proposed).toBe(sum("proposed"))
               expect(total.accepted).toBe(sum("accepted"))
               expect(total.rejected).toBe(sum("rejected"))
+
+              // Adding up the parts can't catch a mistake both sides make the same way (e.g. both counting
+              // sessions that have no decisions), so also check Sessions against the generator itself:
+              // "Sessions" means sessions with at least one decision, and each --session report counts 0 or 1.
+              expect(total.sessions).toBe(mine.filter((list) => list.length > 0).length)
+              parts.forEach((part, i) => expect(part.sessions).toBe(mine[i].length > 0 ? 1 : 0))
             }),
             { numRuns: NUM_RUNS },
           ),

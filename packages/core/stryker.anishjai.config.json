@@ -1,0 +1,17 @@
+{
+  "testRunner": "command",
+  "commandRunner": {
+    "command": "bun test test/report/report.property.test.ts"
+  },
+  "mutate": [
+    "src/permission/decision.ts:99-137"
+  ],
+  "coverageAnalysis": "off",
+  "concurrency": 1,
+  "reporters": [
+    "html",
+    "clear-text",
+    "progress"
+  ],
+  "inPlace": true
+}

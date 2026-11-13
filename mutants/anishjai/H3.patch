@@ -1,0 +1,25 @@
+diff --git a/packages/core/src/permission/decision.ts b/packages/core/src/permission/decision.ts
+index 6af77ac..ce15e72 100644
+--- a/packages/core/src/permission/decision.ts
++++ b/packages/core/src/permission/decision.ts
+@@ -110,16 +110,16 @@ const layer = Layer.effect(
+       }
+       const row = yield* db
+         .select({
+-          sessions: countDistinct(EditDecisionTable.session_id),
++          sessions: countDistinct(SessionTable.id),
+           accepted: sql<number>`coalesce(sum(${EditDecisionTable.decision} = 'accepted'), 0)`,
+           rejected: sql<number>`coalesce(sum(${EditDecisionTable.decision} = 'rejected'), 0)`,
+         })
+-        .from(EditDecisionTable)
+-        .innerJoin(SessionTable, eq(SessionTable.id, EditDecisionTable.session_id))
++        .from(SessionTable)
++        .leftJoin(EditDecisionTable, eq(SessionTable.id, EditDecisionTable.session_id))
+         .where(
+           and(
+             eq(SessionTable.project_id, input.projectID),
+-            input.sessionID ? eq(EditDecisionTable.session_id, input.sessionID) : undefined,
++            input.sessionID ? eq(SessionTable.id, input.sessionID) : undefined,
+           ),
+         )
+         .get()
