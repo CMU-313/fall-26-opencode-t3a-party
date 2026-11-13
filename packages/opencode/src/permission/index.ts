@@ -42,6 +42,10 @@ export function evaluate(permission: string, pattern: string, ...rulesets: Permi
   )
 }
 
+export function filterDeniedRuleset(permission: string, ruleset: PermissionV1.Ruleset): PermissionV1.Ruleset {
+  return ruleset.filter((rule) => Wildcard.match(permission, rule.permission))
+}
+
 export class Service extends Context.Service<Service, Interface>()("@opencode/Permission") {}
 
 const layer = Layer.effect(
@@ -97,7 +101,7 @@ const layer = Layer.effect(
         yield* Effect.logInfo("evaluated", { permission: request.permission, pattern, action: rule })
         if (rule.action === "deny") {
           return yield* new PermissionV1.DeniedError({
-            ruleset: ruleset.filter((rule) => Wildcard.match(request.permission, rule.permission)),
+            ruleset: filterDeniedRuleset(request.permission, ruleset),
           })
         }
         if (rule.action === "allow") continue

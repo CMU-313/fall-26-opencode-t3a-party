@@ -592,6 +592,39 @@ it.instance(
 )
 
 it.instance(
+  "ask - DeniedError ruleset only contains rules matching the denied permission",
+  () =>
+    Effect.gen(function* () {
+      const cases = [
+        { permission: "bash", otherPermission: "edit" },
+        { permission: "edit", otherPermission: "bash" },
+      ]
+      for (const { permission, otherPermission } of cases) {
+        const err = yield* fail(
+          ask({
+            sessionID: SessionID.make("session_test"),
+            permission,
+            patterns: ["anything"],
+            metadata: {},
+            always: [],
+            ruleset: [
+              { permission, pattern: "*", action: "deny" },
+              { permission: otherPermission, pattern: "*", action: "allow" },
+            ],
+          }),
+        )
+        expect(err).toBeInstanceOf(PermissionV1.DeniedError)
+        const denied = err as PermissionV1.DeniedError
+        expect(denied.ruleset.some((rule: PermissionV1.Rule) => rule.permission === permission && rule.pattern === "*")).toBe(true)
+        for (const rule of denied.ruleset) {
+          expect(rule.permission).toBe(permission)
+        }
+      }
+    }),
+  { git: true },
+)
+
+it.instance(
   "ask - stays pending when action is ask",
   () =>
     Effect.gen(function* () {
