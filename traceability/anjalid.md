@@ -11,16 +11,16 @@
 
 ## Requirements table
 
-| ID | Interview evidence | Requirement | Acceptance criteria | Changed in P4? | Property | Kind | Test |
-|---|---|---|---|---|---|---|---|
-| R1 | S-5, O-8 | The denial error's ruleset identifies the rule that caused the denial. | A `DeniedError` thrown for `rm demo.txt` under `{"*":"allow","rm *":"deny"}` has `ruleset` containing `{pattern:"rm *", action:"deny"}`. | Yes | — | — | — |
-| R2 | S-10, O-8 | The denial exposes the matching rule's pattern. | Same as R1; no dedicated test this round. | Yes | — | — | — |
-| R3 | C-8, S-10, O-4 | Every command matching the same deny rule gets the same decision. | — | No | evaluate agrees with an independent reference model | model/oracle | `permission.property.test.ts` |
-| R4 | S-7, C-6, O-6 | Removing a rule makes matched commands follow only remaining rules. | — | No | adding a rule and then removing it leaves evaluation unchanged | round-trip | `permission.property.test.ts` |
-| R5 | C-9, C-11, S-12, O-10 | Last matching rule in the config wins, deterministically. | — | No | swapping the order of two conflicting rules flips which one wins | metamorphic | `permission.property.test.ts` |
-| R6 | S-4, C-4, O-4 | An explicit rule for a destructive command overrides a broader catch-all placed before it. | — | Yes (revised) | a specific rm rule overrides a catch-all placed before it | invariant | `permission.property.test.ts` |
-| R7 | S-8, S-9, C-7, O-7 | User can undo "always allow." | — | No (flagged, not implemented) | — | — | — |
-| R8 | S-9, C-13, C-14 | User can see all current permission rules. | — | No (flagged, not implemented) | — | — | — |
+| ID | Interview evidence | Requirement | Acceptance criteria | Changed in P4? | Property | Kind | Test | Mutants it kills |
+|---|---|---|---|---|---|---|---|---|
+| R1 | S-5, O-8 | The denial error's ruleset identifies the rule that caused the denial. | A `DeniedError` thrown for `rm demo.txt` under `{"*":"allow","rm *":"deny"}` has `ruleset` containing `{pattern:"rm *", action:"deny"}`. | Yes | — | — | — | H4 (after strengthening) |
+| R2 | S-10, O-8 | The denial exposes the matching rule's pattern. | Same as R1; no dedicated test this round. | Yes | — | — | — | H5 (after strengthening) |
+| R3 | C-8, S-10, O-4 | Every command matching the same deny rule gets the same decision. | — | No | evaluate agrees with an independent reference model | model/oracle | `permission.property.test.ts` | H1, H2, H3 |
+| R4 | S-7, C-6, O-6 | Removing a rule makes matched commands follow only remaining rules. | — | No | adding a rule and then removing it leaves evaluation unchanged | round-trip | `permission.property.test.ts` | none directly |
+| R5 | C-9, C-11, S-12, O-10 | Last matching rule in the config wins, deterministically. | — | No | swapping the order of two conflicting rules flips which one wins | metamorphic | `permission.property.test.ts` | H1, H3 |
+| R6 | S-4, C-4, O-4 | An explicit rule for a destructive command overrides a broader catch-all placed before it. | — | Yes (revised) | a specific rm rule overrides a catch-all placed before it | invariant | `permission.property.test.ts` | H3 |
+| R7 | S-8, S-9, C-7, O-7 | User can undo "always allow." | — | No (flagged, not implemented) | — | — | — | — |
+| R8 | S-9, C-13, C-14 | User can see all current permission rules. | — | No (flagged, not implemented) | — | — | — | — |
 
 
 ## AI assistance
@@ -62,3 +62,95 @@ None, this run had zero survivors.
 **What does each approach find that the other doesn’t?**
 Stryker just tries every small change it can think of inside the lines I gave it, so it caught everything in evaluate() without me having to come up with those cases myself. But it can’t find bugs outside that range or bugs that only matter because of what a requirement actually says, that’s where H4 and H5 come in, since they’re about what DeniedError shows, not about evaluate()’s logic.
 
+
+## Agent failure case
+
+**Mutant:** H4 (R1) survived the original properties, R3 included.
+
+**Why:** R3 only calls evaluate() directly. It never touches ask(), so it has no way to see what DeniedError actually exposes. The bug is in ask()'s filtering logic, completely outside what R3 can reach. The generator and the whole property are scoped to the wrong function.
+
+**Transcript showing this kind of property comes from opencode:** to confirm this style of property is something opencode actually produces and not just something I came up with, I asked it the same kind of question that led to R3, to see if it would independently suggest the same approach.
+
+**Prompt to opencode:** I need a property-based test for the evaluate() function in src/permission/index.ts. Can you write a fast-check property test that checks evaluate against an independent reference implementation, so I can confirm the real function and a simple reference model always agree on commands?
+
+
+**opencode response:** 
+​```diff
++ const commandAlphabet = ["a", "b", "c", " "]
++ const commandArb = fc.array(fc.constantFrom(...commandAlphabet), { maxLength: 8 }).map((chars) => chars.join(""))
++ const commandPatternArb = fc
++   .array(fc.constantFrom(...commandAlphabet, "*", "?"), { maxLength: 8 })
++   .map((chars) => chars.join(""))
++ const permissionPatternArb = fc
++   .array(fc.constantFrom("b", "a", "s", "h", "*", "?"), { maxLength: 6 })
++   .map((chars) => chars.join(""))
++ const generatedRuleArb: fc.Arbitrary<PermissionV1.Rule> = fc.record({
++   permission: permissionPatternArb,
++   pattern: commandPatternArb,
++   action: actionArb,
++ })
++ const generatedRulesetArb = fc.array(generatedRuleArb, { maxLength: 8 })
+
++ // Independent glob matcher: unlike Wildcard it works over characters directly instead of building a RegExp.
++ function referenceGlob(input: string, pattern: string): boolean {
++   let inputIndex = 0
++   let patternIndex = 0
++   let starIndex = -1
++   let resumeIndex = 0
++
++   while (inputIndex < input.length) {
++     if (patternIndex < pattern.length && (pattern[patternIndex] === "?" || pattern[patternIndex] === input[inputIndex])) {
++       inputIndex += 1
++       patternIndex += 1
++       continue
++     }
++     if (patternIndex < pattern.length && pattern[patternIndex] === "*") {
++       starIndex = patternIndex
++       resumeIndex = inputIndex
++       patternIndex += 1
++       continue
++     }
++     if (starIndex === -1) return false
++     patternIndex = starIndex + 1
++     resumeIndex += 1
++     inputIndex = resumeIndex
++   }
++
++   while (patternIndex < pattern.length && pattern[patternIndex] === "*") patternIndex += 1
++   return patternIndex === pattern.length
++ }
++
++ function referenceMatches(input: string, pattern: string): boolean {
++   // Wildcard treats a trailing " *" as an optional argument suffix.
++   if (pattern.endsWith(" *")) {
++     return referenceGlob(input, pattern.slice(0, -2)) || referenceGlob(input, pattern)
++   }
++   return referenceGlob(input, pattern)
++ }
++
++ function referenceEvaluate(
++   permission: string,
++   command: string,
++   ruleset: PermissionV1.Ruleset,
++ ): PermissionV1.Rule {
++   let result: PermissionV1.Rule | undefined
++   for (const rule of ruleset) {
++     if (referenceMatches(permission, rule.permission) && referenceMatches(command, rule.pattern)) result = rule
++   }
++   return result ?? { permission, pattern: "*", action: "ask" }
++ }
+
+  test("R3: evaluate agrees with an independent reference model", () => {
+    fc.assert(
+-     fc.property(rulesetArb, patternCommandArb, (ruleset, [, command]) => {
+-       const expected = referenceEvaluate(command, ruleset)
++     fc.property(generatedRulesetArb, commandArb, (ruleset, command) => {
++       const expected = referenceEvaluate(PERMISSION, command, ruleset)
+        const actual = evaluate(PERMISSION, command, ruleset)
+        expect(actual).toEqual(expected)
+      }),
+    )
+  })
+​```
+
+I rejected this edit since it would’ve broken R4/R5/R6 since they rely on patternCommandArb, which this removed, but it still confirms opencode independently suggests the same oracle-style property that my actual R3 test uses, just checking evaluate against an independent reference implementation.
