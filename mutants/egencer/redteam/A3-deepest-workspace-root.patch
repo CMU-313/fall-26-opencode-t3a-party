@@ -1,0 +1,15 @@
+diff --git a/packages/tui/src/util/repository-functionality.ts b/packages/tui/src/util/repository-functionality.ts
+index 34f4d7c..3a66957 100644
+--- a/packages/tui/src/util/repository-functionality.ts
++++ b/packages/tui/src/util/repository-functionality.ts
+@@ -29,7 +29,9 @@ function label(value: string) {
+ function groupRoot(file: string) {
+   const dirs = file.split("/").slice(0, -1)
+   if (!dirs.length) return "."
+-  return workspaceRoots.has(dirs[0]) && dirs[1] ? dirs.slice(0, 2).join("/") : dirs[0]
++  // Support nested workspaces (e.g. examples/apps/demo): group by the deepest workspace root.
++  const workspace = dirs.findLastIndex((part) => workspaceRoots.has(part))
++  return workspace >= 0 && dirs[workspace + 1] ? dirs.slice(0, workspace + 2).join("/") : dirs[0]
+ }
+ 
+ function subgroupRoot(file: string, root: string) {

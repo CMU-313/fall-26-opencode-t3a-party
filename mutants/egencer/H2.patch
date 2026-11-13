@@ -1,0 +1,20 @@
+diff --git a/packages/opencode/src/tool/edit.ts b/packages/opencode/src/tool/edit.ts
+index 6b3d124..e8ae8ad 100644
+--- a/packages/opencode/src/tool/edit.ts
++++ b/packages/opencode/src/tool/edit.ts
+@@ -151,6 +151,7 @@ export const EditTool = Tool.define(
+                   normalizeLineEndings(contentNew),
+                 ),
+               )
++              yield* familiarity.markFamiliar(filePath)
+               yield* ctx.ask({
+                 permission: "edit",
+                 patterns: [path.relative(instance.worktree, filePath)],
+@@ -161,7 +162,6 @@ export const EditTool = Tool.define(
+                   unfamiliarFiles,
+                 },
+               })
+-              yield* familiarity.markFamiliar(filePath)
+ 
+               yield* afs.writeWithDirs(filePath, Bom.join(contentNew, desiredBom))
+               if (yield* format.file(filePath)) {

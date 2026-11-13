@@ -1,0 +1,41 @@
+diff --git a/packages/opencode/src/permission/index.ts b/packages/opencode/src/permission/index.ts
+index db19a63..31d808c 100644
+--- a/packages/opencode/src/permission/index.ts
++++ b/packages/opencode/src/permission/index.ts
+@@ -105,22 +105,20 @@ const layer = Layer.effect(
+       }
+ 
+       const unfamiliar = FamiliarityMetadata.files(request.metadata).length > 0
+-      if (!needsAsk) {
+-        if (!unfamiliar) return
+-        // The student chose "always allow AI edits on unfamiliar files": let the edit through without a prompt,
+-        // but still publish a one-line notice so they know an unfamiliar file was touched.
+-        if (current.allowUnfamiliar) {
+-          yield* events.publish(Event.Asked, {
+-            id: request.id ?? PermissionV1.ID.ascending(),
+-            sessionID: request.sessionID,
+-            permission: request.permission,
+-            patterns: request.patterns,
+-            metadata: { ...request.metadata, [FamiliarityMetadata.AUTO_ALLOWED_KEY]: true },
+-            always: request.always,
+-            tool: request.tool,
+-          })
+-          return
+-        }
++      if (!needsAsk && !unfamiliar) return
++      // The student chose "always allow AI edits on unfamiliar files": let the edit through without a prompt,
++      // but still publish a one-line notice so they know an unfamiliar file was touched.
++      if (unfamiliar && current.allowUnfamiliar) {
++        yield* events.publish(Event.Asked, {
++          id: request.id ?? PermissionV1.ID.ascending(),
++          sessionID: request.sessionID,
++          permission: request.permission,
++          patterns: request.patterns,
++          metadata: { ...request.metadata, [FamiliarityMetadata.AUTO_ALLOWED_KEY]: true },
++          always: request.always,
++          tool: request.tool,
++        })
++        return
+       }
+ 
+       const id = request.id ?? PermissionV1.ID.ascending()

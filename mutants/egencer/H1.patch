@@ -1,0 +1,13 @@
+diff --git a/packages/opencode/src/permission/index.ts b/packages/opencode/src/permission/index.ts
+index db19a63..c89b6d0 100644
+--- a/packages/opencode/src/permission/index.ts
++++ b/packages/opencode/src/permission/index.ts
+@@ -104,7 +104,7 @@ const layer = Layer.effect(
+         needsAsk = true
+       }
+ 
+-      const unfamiliar = FamiliarityMetadata.files(request.metadata).length > 0
++      const unfamiliar = FamiliarityMetadata.files(request.metadata).length > 1
+       if (!needsAsk) {
+         if (!unfamiliar) return
+         // The student chose "always allow AI edits on unfamiliar files": let the edit through without a prompt,

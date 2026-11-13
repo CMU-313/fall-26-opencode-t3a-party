@@ -1,0 +1,13 @@
+diff --git a/packages/opencode/src/tool/apply_patch.ts b/packages/opencode/src/tool/apply_patch.ts
+index 6326b29..94c7870 100644
+--- a/packages/opencode/src/tool/apply_patch.ts
++++ b/packages/opencode/src/tool/apply_patch.ts
+@@ -221,7 +221,7 @@ export const ApplyPatchTool = Tool.define(
+       })
+       yield* Effect.forEach(
+         fileChanges.filter((c) => c.type !== "delete"),
+-        (c) => familiarity.markFamiliar(c.movePath ?? c.filePath),
++        (c) => familiarity.markFamiliar(c.filePath),
+         { discard: true },
+       )
+ 

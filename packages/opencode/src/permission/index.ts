@@ -126,9 +126,7 @@ const layer = Layer.effect(
       const id = request.id ?? PermissionV1.ID.ascending()
       // Flag prompts the rules alone would have allowed, so the UI can explain why an "allowed" edit still stops.
       const forced = !needsAsk && unfamiliar
-      const metadata = forced
-        ? { ...request.metadata, [FamiliarityMetadata.FORCED_KEY]: true }
-        : request.metadata
+      const metadata = forced ? { ...request.metadata, [FamiliarityMetadata.FORCED_KEY]: true } : request.metadata
       const info: PermissionV1.Request = {
         id,
         sessionID: request.sessionID,
@@ -190,25 +188,29 @@ const layer = Layer.effect(
       yield* recordEditDecision(existing.info, "accepted")
       if (input.reply === "once") return
 
-      // "Always" on a forced unfamiliar-file prompt also opts into allowing future unfamiliar edits silently.
-      if (FamiliarityMetadata.forced(existing.info.metadata)) current.allowUnfamiliar = true
-
-      for (const pattern of existing.info.always) {
-        approved.push({
-          permission: existing.info.permission,
-          pattern,
-          action: "allow",
-        })
-      }
+      // "Always" on a forced unfamiliar-file prompt means "allow AI edits on unfamiliar files" and nothing more: it
+      // opts into allowing future unfamiliar edits silently, but adds no approval rule. The rules already allowed
+      // this edit, and an approval like `edit: *` is checked after config rules, so it would silently override deny
+      // rules such as `secrets/*` (R6).
+      const forced = FamiliarityMetadata.forced(existing.info.metadata)
+      if (forced) current.allowUnfamiliar = true
+      else
+        for (const pattern of existing.info.always) {
+          approved.push({
+            permission: existing.info.permission,
+            pattern,
+            action: "allow",
+          })
+        }
 
       for (const [id, item] of pending.entries()) {
         if (item.info.sessionID !== existing.info.sessionID) continue
-        const ok = item.info.patterns.every(
-          (pattern) => evaluate(item.info.permission, pattern, approved).action === "allow",
-        )
+        // A pending forced prompt was already allowed by the rules; only its unfamiliar files held it back.
+        const ok =
+          (current.allowUnfamiliar && FamiliarityMetadata.forced(item.info.metadata)) ||
+          item.info.patterns.every((pattern) => evaluate(item.info.permission, pattern, approved).action === "allow")
         // Once the student has opted in, pending unfamiliar edits no longer need to keep asking.
-        const blockedByUnfamiliar =
-          !current.allowUnfamiliar && FamiliarityMetadata.files(item.info.metadata).length > 0
+        const blockedByUnfamiliar = !current.allowUnfamiliar && FamiliarityMetadata.files(item.info.metadata).length > 0
         if (!ok || blockedByUnfamiliar) continue
         pending.delete(id)
         yield* events.publish(Event.Replied, {

@@ -1,0 +1,13 @@
+diff --git a/packages/tui/src/util/repository-functionality.ts b/packages/tui/src/util/repository-functionality.ts
+index 34f4d7c..26ac7dd 100644
+--- a/packages/tui/src/util/repository-functionality.ts
++++ b/packages/tui/src/util/repository-functionality.ts
+@@ -64,7 +64,7 @@ function limit<T extends LearningArea>(areas: T[], maximum: number, overflow: (r
+ }
+ 
+ export function analyzeRepositoryGroups(input: readonly string[], referencedFiles: readonly string[] = []) {
+-  const files = [...new Set(input.map(normalize))]
++  const files = [...new Set(input)].map(normalize)
+     .filter((file) => file && !file.split("/").slice(0, -1).some((part) => ignored.has(part)))
+     .sort((a, b) => a.localeCompare(b))
+   const referenced = new Set(referencedFiles.map(normalize))

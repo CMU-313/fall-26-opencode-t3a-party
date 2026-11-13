@@ -1,0 +1,13 @@
+diff --git a/packages/opencode/src/tool/edit.ts b/packages/opencode/src/tool/edit.ts
+index 6b3d124..533bb6c 100644
+--- a/packages/opencode/src/tool/edit.ts
++++ b/packages/opencode/src/tool/edit.ts
+@@ -674,6 +674,8 @@ export function trimDiff(diff: string): string {
+   // strip different whitespace from each line and misstate their relative indentation.
+   let common: string | undefined
+   for (const line of contentLines) {
++    // Only the changed lines decide the indent; context lines are shown as-is around them.
++    if (line.startsWith(" ")) continue
+     const content = line.slice(1)
+     if (content.trim().length === 0) continue
+     const indent = content.match(/^\s*/)![0]
