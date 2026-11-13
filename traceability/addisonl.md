@@ -79,3 +79,74 @@ I think the hand-written mutants test realistic, meaning-level bugs against a sp
 | 215 | Remove `.trim()` on stderr | The regexes use the `m` flag and the fallback message uses only the first line. git prints no leading whitespace, so trimming only removes a trailing newline, which changes nothing. |
 | 57, 59 | All 9 regex mutants for git log's "no path" and "has only N lines" errors | `locate` already runs `git cat-file` on the same `HEAD` and rejects files not in it and ranges past its end. `git log` can only print these errors if a commit lands between the two calls. |
 | 55 | Remove `^` or `$` from the "not in 'HEAD'" regex (2 mutants) | `git cat-file` prints this error as one line with nothing around it, so the anchored and unanchored patterns match the same output. |
+
+## Agent failure case
+
+**Property:** R6, "R6: uncommitted edits don't change history", written by the AI agent.
+
+**Transcript of Claude Code from P4 (couldn't get openrouter model to work):**
+
+> **Prompt:** This time, can you help me write some fastcheck properties to test R6 in provenance.property.test.ts?
+>
+> **Response (R6 part):**
+> ```ts
+> fc.asyncProperty(
+>   history,
+>   fc.nat(),
+>   fc.nat(),
+>   fc.array(edit, { minLength: 1, maxLength: 4 }),
+>   async (input, a, b, uncommitted) => {
+>     const file = fresh("r6")
+>     const lines = await build(run, dir, file, input)
+>     // Line numbers refer to the last committed version of the file.
+>     const range = pick(lines.length, a, b)
+>     const before = await run(provenance.get(file, range.start, range.end))
+>     const edited = uncommitted.reduce((state, change, i) => apply(state, change, `uncommitted ${i}`), lines)
+>     await Bun.write(path.join(dir, file), text(edited))
+>     const after = await run(provenance.get(file, range.start, range.end))
+>     expect(ids(after)).toEqual(ids(before))
+>   },
+> )
+
+
+**Mutant it let survive:** H4 (line 91: `` `HEAD:${rel}` `` → `` `:${rel}` ``), which reads the file's length from the staged version instead of the last commit.
+
+**Why the property was too weak:** It only made unstaged edits, so the staged version always matched the last commit and the two could never be told apart. It also always picked a range inside the committed file and only compared commit lists, so nothing checked where the range bounds come from. Its comment claims "line numbers refer to the last committed version", but no assertion tests that.
+
+**Strengthened version:** a new property, "R6: range bounds follow the last committed version". It generates a committed length (0-15 lines), with or without a final newline, a change in length (-5 to +5), and whether to stage the change. A range ending at the committed length must succeed, and one ending one line later must fail with `invalid-range`.
+
+```ts
+fc.asyncProperty(
+  fc.integer({ min: 0, max: 15 }),
+  fc.boolean(),
+  fc.integer({ min: -5, max: 5 }),
+  fc.boolean(),
+  async (committed, newline, delta, staged) => {
+    const file = fresh("r6-bounds")
+    const lines = Array.from({ length: committed }, (_, i) => `line ${i + 1}`)
+    await run(commit(dir, file, lines.join("\n") + (newline && committed ? "\n" : ""), "create"))
+    const working = Array.from({ length: Math.max(0, committed + delta) }, (_, i) => `changed ${i + 1}`)
+    await Bun.write(path.join(dir, file), text(working))
+    if (staged) await $`git add -- ${file}`.cwd(dir).quiet()
+
+    if (committed > 0) expect((await run(provenance.get(file, 1, committed))).commits.length).toBe(1)
+    const past = await run(Effect.flip(provenance.get(file, 1, committed + 1)).pipe(Effect.option))
+    expect(past._tag).toBe("Some")
+    if (past._tag === "None") return
+    expect(past.value.reason).toBe("invalid-range")
+    expect(past.value.message).not.toBe("")
+  },
+)
+```
+
+**Evidence:** with `H4.patch` applied, the original R6 property passes (`1 pass, 0 fail`) and the new one fails:
+
+```
+(fail) GitProvenance properties > R6: range bounds follow the last committed version
+error: Property failed after 3 tests
+Counterexample: [1,false,1,true]
+Expected: "Some"
+Received: "None"
+```
+
+The counterexample is a 1-line committed file with a staged change to 2 lines. H4 reads the staged length (2), so a range ending at line 2 is wrongly accepted instead of failing.
