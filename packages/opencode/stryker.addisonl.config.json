@@ -1,0 +1,9 @@
+{
+  "testRunner": "command",
+  "commandRunner": { "command": "bun test test/git/provenance.property.test.ts" },
+  "mutate": ["src/git/provenance.ts:54-180", "src/git/provenance.ts:193-233"],
+  "coverageAnalysis": "off",
+  "concurrency": 4,
+  "timeoutMS": 30000,
+  "reporters": ["html", "clear-text", "progress"]
+}
