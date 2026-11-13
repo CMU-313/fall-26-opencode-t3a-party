@@ -9,6 +9,10 @@ import { GitProvenance } from "../../src/git/provenance"
 import { provideTmpdirInstance, testInstanceStoreLayer } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 
+// Fixed seed so Stryker runs are repeatable. Under Stryker, stop at the first failure instead of shrinking:
+// shrinking re-runs real git commits and can outlast Stryker's timeout, turning a kill into a timeout.
+fc.configureGlobal({ seed: 42, endOnFailure: process.env.__STRYKER_ACTIVE_MUTANT__ !== undefined })
+
 const it = testEffect(
   Layer.mergeAll(
     LayerNode.compile(GitProvenance.node),
@@ -25,9 +29,9 @@ const fresh = (prefix: string) => `${prefix}-${counter++}.ts`
 
 const text = (lines: readonly string[]) => lines.map((line) => `${line}\n`).join("")
 
-const commit = (dir: string, file: string, lines: readonly string[], message: string) =>
+const commit = (dir: string, file: string, content: string | readonly string[], message: string) =>
   Effect.promise(async () => {
-    await Bun.write(path.join(dir, file), text(lines))
+    await Bun.write(path.join(dir, file), typeof content === "string" ? content : text(content))
     await $`git add -- ${file}`.cwd(dir).quiet()
     await $`git commit --allow-empty --allow-empty-message -m ${message}`.cwd(dir).quiet()
     return (await $`git rev-parse HEAD`.cwd(dir).quiet().text()).trim()
@@ -164,17 +168,23 @@ describe("GitProvenance properties", () => {
                     await Bun.write(path.join(outside.dir, plain), content)
 
                     const cases = [
-                      { name: "untracked", run: inRepo, file: untracked },
-                      { name: "nonexistent", run: inRepo, file: fresh("missing") },
-                      { name: "non-repo", run: outside.run, file: plain },
-                    ]
+                      { reason: "untracked", run: inRepo, file: untracked },
+                      { reason: "not-a-file", run: inRepo, file: fresh("missing") },
+                      { reason: "not-a-repository", run: outside.run, file: plain },
+                    ] as const
                     const messages = await Promise.all(
                       cases.map(async (item) => {
                         const result = await item.run(Effect.result(provenance.get(item.file, range.start, range.end)))
                         const block = await item.run(provenance.context([`${item.file}:${range.start}-${range.end}`]))
-                        expect(result._tag, `${item.name} should fail instead of returning history`).toBe("Failure")
+                        expect(result._tag, `${item.reason} should fail instead of returning history`).toBe("Failure")
+                        if (result._tag === "Success") return ""
+                        // Each input must be reported as its own problem with a non-empty message, and /explain must
+                        // show that message instead of a history.
+                        expect(result.failure.reason).toBe(item.reason)
+                        expect(result.failure.message).not.toBe("")
+                        expect(block).toContain(result.failure.message)
                         expect(block).not.toContain("No commits found")
-                        return result._tag === "Failure" ? result.failure.message.replace(item.file, "<file>") : ""
+                        return result.failure.message.replace(item.file, "<file>")
                       }),
                     )
 
@@ -257,7 +267,7 @@ describe("GitProvenance properties", () => {
 
                     const expected = await run(provenance.get(benign, range.start, range.end))
                     const actual = await run(provenance.get(evil, range.start, range.end))
-                    await run(provenance.context([`${evil}:${range.start}-${range.end}`]))
+                    const block = await run(provenance.context([`${evil}:${range.start}-${range.end}`]))
 
                     // Hashes differ between the two files, so compare positions in the generated history.
                     expect(ids(actual).map((hash) => evilHashes.indexOf(hash))).toEqual(
@@ -269,6 +279,9 @@ describe("GitProvenance properties", () => {
                     )
                     const shown = actual.commits.find((item) => item.hash === evilHashes[at])
                     if (shown) expect(shown.subject).toBe(stored)
+                    // /explain must also list every collected commit and show the hostile subject as quoted data.
+                    for (const hash of ids(actual)) expect(block).toContain(hash)
+                    if (shown) expect(block).toContain(JSON.stringify(stored))
                     expect(await Bun.file(marker).exists()).toBe(false)
                   },
                 ),
@@ -300,14 +313,22 @@ describe("GitProvenance properties", () => {
                   fc.integer({ min: 1, max: 12 }),
                   fc.nat(),
                   fc.nat(),
-                  // true edits a line inside the range, false edits one outside it (when one exists). Up to 16
-                  // edits means n reaches 17, covering both sides of the 10/11 boundary from the interviews.
-                  fc.array(fc.record({ inside: fc.boolean(), at: fc.nat() }), { maxLength: 16 }),
+                  // The number of edits inside the range is generated directly, so n = inside + 1 spreads evenly
+                  // over 1-16 and both sides of the 10/11 boundary from the interviews show up in every run.
+                  // A coin flip per edit made n > 10 too rare for the notice check to fire reliably.
+                  fc.integer({ min: 0, max: 15 }),
+                  // Positions of edits outside the range, which must not count as matching commits.
+                  fc.array(fc.nat(), { maxLength: 4 }),
                   // Limits from 1 to 15, so n is sometimes below, equal to, and above the limit.
                   fc.integer({ min: 1, max: 15 }),
-                  async (length, a, b, changes, limit) => {
+                  // Asks /explain about a single line with the `file:N` form instead of `file:N-M`.
+                  fc.boolean(),
+                  // Words before the range argument, since /explain arguments are not only the range.
+                  fc.array(fc.constantFrom("explain", "this", "why?"), { maxLength: 2 }),
+                  async (length, a, b, insideEdits, outsideAt, limit, single, words) => {
                     const file = fresh("r4")
-                    const range = pick(length, a, b)
+                    const picked = pick(length, a, b)
+                    const range = single ? { start: picked.start, end: picked.start } : picked
                     const outsideLines = Array.from({ length }, (_, i) => i + 1).filter(
                       (line) => line < range.start || line > range.end,
                     )
@@ -315,25 +336,27 @@ describe("GitProvenance properties", () => {
                     await run(commit(dir, file, initial, "create"))
                     // In-place replacements never shift lines, so the range keeps meaning the same lines and
                     // every inside edit is a matching commit while every outside edit is not.
-                    const inside = await changes.reduce(async (previous, change, i) => {
-                      const state = await previous
-                      const useInside = change.inside || outsideLines.length === 0
-                      const line = useInside
-                        ? range.start + (change.at % (range.end - range.start + 1))
-                        : outsideLines[change.at % outsideLines.length]
-                      const next = state.lines.toSpliced(line - 1, 1, `edit ${i}`)
+                    const changes = [
+                      ...Array.from({ length: insideEdits }, (_, i) => range.start + (i % (range.end - range.start + 1))),
+                      ...(outsideLines.length ? outsideAt.map((at) => outsideLines[at % outsideLines.length]) : []),
+                    ]
+                    await changes.reduce(async (previous, line, i) => {
+                      const next = (await previous).toSpliced(line - 1, 1, `edit ${i}`)
                       await run(commit(dir, file, next, `edit ${i}`))
-                      return { lines: next, count: state.count + (useInside ? 1 : 0) }
-                    }, Promise.resolve({ lines: initial as readonly string[], count: 0 }))
+                      return next
+                    }, Promise.resolve(initial as readonly string[]))
                     // The creating commit also touches every line in the range.
-                    const n = inside.count + 1
+                    const n = insideEdits + 1
 
                     const result = await run(provenance.get(file, range.start, range.end, { maxCommits: limit }))
                     expect(result.commits.length).toBe(Math.min(n, limit))
                     expect(result.truncated).toBe(n > limit)
 
-                    // The /explain context block always uses the default limit of 10.
-                    const block = await run(provenance.context([`${file}:${range.start}-${range.end}`]))
+                    // The /explain context block always uses the default limit of 10, and must list each shown commit.
+                    const argument = single ? `${file}:${range.start}` : `${file}:${range.start}-${range.end}`
+                    const block = await run(provenance.context([...words, argument]))
+                    const shown = await run(provenance.get(file, range.start, range.end))
+                    for (const hash of ids(shown)) expect(block).toContain(hash)
                     const notice = `Only the ${Math.min(n, 10)} most recent matching commits are shown`
                     expect(block?.includes(notice)).toBe(n > 10)
                   },
@@ -368,8 +391,10 @@ describe("GitProvenance properties", () => {
                   fc.nat(),
                   // Limits around the history size, so some runs truncate and others return everything.
                   fc.integer({ min: 1, max: 15 }),
-                  async (input, a, b, limit) => {
-                    const file = fresh("r5")
+                  // Puts the file in a subdirectory, so paths handed to git are not always a bare file name.
+                  fc.boolean(),
+                  async (input, a, b, limit, nested) => {
+                    const file = nested ? `dir-${counter}/${fresh("r5")}` : fresh("r5")
                     const lines = await build(run, dir, file, input)
                     const range = pick(lines.length, a, b)
 
@@ -430,6 +455,54 @@ describe("GitProvenance properties", () => {
                     const after = await run(provenance.get(file, range.start, range.end))
 
                     expect(ids(after)).toEqual(ids(before))
+                  },
+                ),
+                { numRuns: RUNS },
+              ),
+            )
+          }),
+        { git: true },
+      ),
+    TIMEOUT,
+  )
+
+  // R6 (invariant): for any committed file of L lines and any uncommitted (staged or unstaged) change in length,
+  // a range ending at line L is accepted and a range ending at line L + 1 fails with `invalid-range`, so range
+  // bounds follow the last committed version rather than the working tree or the index.
+  it.live(
+    "R6: range bounds follow the last committed version",
+    () =>
+      provideTmpdirInstance(
+        (dir) =>
+          Effect.gen(function* () {
+            const provenance = yield* GitProvenance.Service
+            const run = yield* runner
+
+            yield* Effect.promise(() =>
+              fc.assert(
+                fc.asyncProperty(
+                  // Committed length, including empty files, where every range is out of bounds.
+                  fc.integer({ min: 0, max: 15 }),
+                  // With and without a final newline, since both are valid files and count lines differently.
+                  fc.boolean(),
+                  // Lines added to or removed from the working tree, so it can be longer or shorter than the commit.
+                  fc.integer({ min: -5, max: 5 }),
+                  // Stages the uncommitted change, so the index also differs from the last commit.
+                  fc.boolean(),
+                  async (committed, newline, delta, staged) => {
+                    const file = fresh("r6-bounds")
+                    const lines = Array.from({ length: committed }, (_, i) => `line ${i + 1}`)
+                    await run(commit(dir, file, lines.join("\n") + (newline && committed ? "\n" : ""), "create"))
+                    const working = Array.from({ length: Math.max(0, committed + delta) }, (_, i) => `changed ${i + 1}`)
+                    await Bun.write(path.join(dir, file), text(working))
+                    if (staged) await $`git add -- ${file}`.cwd(dir).quiet()
+
+                    if (committed > 0) expect((await run(provenance.get(file, 1, committed))).commits.length).toBe(1)
+                    const past = await run(Effect.flip(provenance.get(file, 1, committed + 1)).pipe(Effect.option))
+                    expect(past._tag).toBe("Some")
+                    if (past._tag === "None") return
+                    expect(past.value.reason).toBe("invalid-range")
+                    expect(past.value.message).not.toBe("")
                   },
                 ),
                 { numRuns: RUNS },
