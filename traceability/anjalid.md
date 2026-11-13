@@ -154,3 +154,12 @@ Stryker just tries every small change it can think of inside the lines I gave it
 ​```
 
 I rejected this edit since it would’ve broken R4/R5/R6 since they rely on patternCommandArb, which this removed, but it still confirms opencode independently suggests the same oracle-style property that my actual R3 test uses, just checking evaluate against an independent reference implementation.
+
+
+## Red team
+
+| Mutant | Sent by | Requirement | Change | Result before | Fix | Result after |
+|---|---|---|---|---|---|---|
+| RT1 | dylany3 | R1 | `ask()`: denial ruleset filtered against `pattern` instead of `request.permission`, so `DeniedError` comes back with an unrelated or empty ruleset | Survived: nothing calls `ask()` directly, so the bug in the call site was invisible | Added a new test in `test/permission/next.test.ts` that calls `ask()` directly through the real Effect service and checks the returned `DeniedError`'s ruleset only contains rules for the permission actually denied | Killed |
+| RT2 | dylany3 | R3 | `wildcard.ts`: trailing `" *"` boundary changed from `"( .*)?"` to `".*"`, so `rm *` also matches commands like `rmdir` that only share a prefix | Survived: my generated commands only ever came from fixed pattern/command pairs or `"rm " + suffix`, never a command like `rmdir` with no space after `rm` | Added a new property that generates commands with no space right after `rm` and checks they're never denied by the `rm *` rule | Killed |
+| RT3 | dylany3 | R5 | `evaluate()`: dropped the permission check in the match condition, so a rule for a different permission (like `edit`) can decide a `bash` command | Survived against earlier properties, but I'd already added a property for this exact case (`evaluate: a rule for a different permission never determines the result`) while strengthening R1/R2 earlier | No new fix needed, already killed | Killed |

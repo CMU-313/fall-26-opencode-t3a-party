@@ -117,3 +117,27 @@ test("R1/R2: a denial error's ruleset only contains rules that match the denied 
     }),
   )
 })
+
+test("evaluate: a rule for a different permission never determines the result", () => {
+  fc.assert(
+    fc.property(patternCommandArb, actionArb, fc.constantFrom("edit", "write"), ([pattern, command], action, otherPermission) => {
+      const rule: Rule = { permission: otherPermission, pattern, action }
+      expect(evaluate(PERMISSION, command, [rule] as any).action).toBe("ask")
+    }),
+  )
+})
+
+// R3 (strengthened): a command that shares a prefix with a pattern, but has no space boundary after it, doesn't match.
+test("evaluate: 'rm*' pattern requires a word boundary, not just a shared prefix", () => {
+  fc.assert(
+    fc.property(
+      fc.string({ minLength: 1, maxLength: 10 }).filter((s) => !s.startsWith(" ")),
+      (suffix) => {
+        const command = `rm${suffix}`
+        const ruleset: Rule[] = [{ permission: PERMISSION, pattern: "rm *", action: "deny" }]
+        const result = evaluate(PERMISSION, command, ruleset as any)
+        expect(result.action).not.toBe("deny")
+      },
+    ),
+  )
+})
